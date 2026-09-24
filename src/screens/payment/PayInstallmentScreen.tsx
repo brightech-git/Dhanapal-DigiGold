@@ -27,6 +27,8 @@ import { SchemeCollectInsert } from '../../types/Razorpay/Razorpay';
 import { PPData } from '../../types/Account/PhoneDetails';
 import { useToast } from '../../components/ui/Toast';
 import AppHeader from '../../components/ui/appcomponents/AppHeader';
+import GoldAmountInput from '../../components/ui/appcomponents/GoldAmountInput';
+import { ratesService } from '../../api/services/ratesService';
 
 type RouteProps = RouteProp<RootStackParamList, 'PayInstallment'>;
 type NavProps   = NativeStackNavigationProp<RootStackParamList, 'PayInstallment'>;
@@ -175,6 +177,39 @@ export default function PayInstallmentScreen() {
   const defaultAmount = prevAmount ? Math.round(parseFloat(prevAmount)) : 0;
 
   const [customAmount, setCustomAmount] = useState('');
+  const [weightInput,  setWeightInput]  = useState('');
+
+  // DigiGold: WeightLedger=Y means amount↔weight conversion is shown
+  const isDigiGold = scheme?.weightLedger === 'Y' && !isFixed;
+
+  const [goldRate,     setGoldRate]     = useState(0);
+  const [ratesLoading, setRatesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isDigiGold) return;
+    setRatesLoading(true);
+    ratesService.getTodayRate()
+      .then(r => { if (r?.GOLDRATE) setGoldRate(r.GOLDRATE); })
+      .catch(() => {})
+      .finally(() => setRatesLoading(false));
+  }, [isDigiGold]);
+
+  // Keep weight in sync when amount changes
+  const handleAmountChange = (v: string) => {
+    const digits = v.replace(/[^0-9.]/g, '');
+    setCustomAmount(digits);
+    const amt = parseFloat(digits) || 0;
+    setWeightInput(goldRate > 0 && amt > 0 ? (amt / goldRate).toFixed(4) : '');
+  };
+
+  // Keep amount in sync when weight changes
+  const handleWeightChange = (v: string) => {
+    const digits = v.replace(/[^0-9.]/g, '');
+    setWeightInput(digits);
+    const wt = parseFloat(digits) || 0;
+    setCustomAmount(goldRate > 0 && wt > 0 ? String(Math.round(wt * goldRate)) : '');
+  };
+
   const effectiveAmount = isFixed ? defaultAmount : (parseInt(customAmount) || 0);
 
   const isReady = effectiveAmount > 0;
@@ -320,8 +355,20 @@ export default function PayInstallmentScreen() {
                 </Text>
               </View>
             </View>
+          ) : isDigiGold ? (
+            /* DigiGold: dual amount ↔ weight input */
+            <GoldAmountInput
+              amountInput={customAmount}
+              weightInput={weightInput}
+              onAmountChange={handleAmountChange}
+              onWeightChange={handleWeightChange}
+              goldRate={goldRate}
+              ratesLoading={ratesLoading}
+              presets={[500, 1000, 2000, 5000]}
+              onPresetPress={(v) => handleAmountChange(String(v))}
+            />
           ) : (
-            /* Flexible amount input */
+            /* Plain flexible amount input */
             <View>
               <Text style={[s.inputLabel, { color: COLORS.contentSecondary, fontFamily: FONTS.family.medium }]}>
                 Amount (₹) *

@@ -89,6 +89,7 @@ export function useRazorpay(): UseRazorpayReturn {
     // Local (non-state) flag — `status`/`verifyData` React state don't update
     // synchronously within this single call, so the catch block below can't
     // rely on them to know whether the payment itself was already captured.
+    let paymentCaptured = false;
     let paymentCapturedButProcessingFailed = false;
 
     try {
@@ -132,7 +133,7 @@ export function useRazorpay(): UseRazorpayReturn {
         },
       });
 
-      // ── Step 3: Build verify payload ──────────────────────────
+      // ── Step 3: Verify with retry (network errors are common here) ──
       setStatus('verifying');
       console.log('[STEP 3] CHECKOUT — Payment received from Razorpay');
       console.log('  payment_id :', paymentData.razorpay_payment_id);
@@ -140,12 +141,11 @@ export function useRazorpay(): UseRazorpayReturn {
       console.log('  signature  :', paymentData.razorpay_signature);
       console.log('------------------------------------------');
 
-      // NOTE: /razorpay/verify-payment binds @RequestBody Map<String,String>
-      // on the backend, so it ONLY accepts these three flat string fields.
-      // No userDetails here — the full payload already went up with
-      // /create-order (NMDATA/SCHEMEDETAILS) and the backend moves it into
-      // the real DB itself (see processPendingPayment), returning the result
-      // in verifyRes.data.processResult below.
+      // Payment is captured by Razorpay — mark this so catch block never
+      // calls markFailed (money is already taken; backend webhook will handle
+      // it even if our verify call keeps failing).
+      paymentCaptured = true;
+
       const verifyPayload = {
         razorpay_payment_id: paymentData.razorpay_payment_id,
         razorpay_order_id:   paymentData.razorpay_order_id,
@@ -155,7 +155,32 @@ export function useRazorpay(): UseRazorpayReturn {
       console.log('[STEP 3] VERIFY PAYMENT — Request');
       console.log(JSON.stringify(verifyPayload, null, 2));
 
-      const verifyRes = await razorpayService.verifyPayment(verifyPayload);
+      // Retry verify up to 3 times with 2s delay between attempts
+      let verifyRes: any = null;
+      let lastVerifyErr: any = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          verifyRes = await razorpayService.verifyPayment(verifyPayload);
+          lastVerifyErr = null;
+          break;
+        } catch (e: any) {
+          lastVerifyErr = e;
+          const isNetwork = !e?.statusCode || e?.message === 'Network Error';
+          console.warn(`[STEP 3] VERIFY attempt ${attempt} failed:`, e?.message);
+          if (attempt < 3 && isNetwork) {
+            await new Promise(r => setTimeout(r, 2000));
+          } else {
+            break;
+          }
+        }
+      }
+
+      if (!verifyRes) {
+        // All retries exhausted — payment IS captured by Razorpay.
+        // Backend webhook will process it. Show a pending message instead
+        // of a hard failure.
+        throw Object.assign(lastVerifyErr ?? new Error('Verify failed'), { _verifyNetworkFail: true });
+      }
 
       console.log('[STEP 3] VERIFY PAYMENT — Response');
       console.log(JSON.stringify(verifyRes, null, 2));
@@ -189,7 +214,6 @@ export function useRazorpay(): UseRazorpayReturn {
           'Please contact support with this reference: ' + orderIdRef.current,
         );
       }
-
       // ── Step 4: Post-verify UI side-effect ─────────────────────
       // Member/installment creation already happened server-side (backend
       // moved the parked NMDATA/SCHEMEDETAILS into the real DB — result is
@@ -205,15 +229,26 @@ export function useRazorpay(): UseRazorpayReturn {
       setStatus('success');
 
     } catch (err: any) {
-      const rzpErr = err as RazorpayError;
       const isCancelled =
         rzpErr?.code === 'BAD_REQUEST_ERROR' &&
         (rzpErr?.description ?? '').toLowerCase().includes('cancel');
+
+      // Verify network failure — payment IS captured, webhook will handle it
+      const isVerifyNetworkFail = !!(err as any)?._verifyNetworkFail;
 
       if (isCancelled) {
         console.log('[STEP X] PAYMENT CANCELLED by user');
         console.log('==========================================');
         setStatus('cancelled');
+      } else if (isVerifyNetworkFail) {
+        console.warn('[STEP X] VERIFY NETWORK FAIL — payment captured, webhook will process');
+        console.log('==========================================');
+        setStatus('failed');
+        setError(
+          'Payment was received but verification timed out. ' +
+          'Your account will be updated automatically. ' +
+          'Reference: ' + orderIdRef.current,
+        );
       } else {
         console.log('[STEP X] PAYMENT FAILED');
         console.log('  Error:', rzpErr?.description ?? (err as any)?.message);
@@ -226,11 +261,9 @@ export function useRazorpay(): UseRazorpayReturn {
         );
       }
 
-      // Don't call markFailed when the payment itself was genuinely captured
-      // and only the server-side record creation failed — the order should
-      // stay SUCCESS, and AppPayment_TempData is already left claimable for
-      // a retry by the backend (PROCESSED reset to 0 on PROCESS_FAILED/ERROR).
-      if (orderIdRef.current && !paymentCapturedButProcessingFailed) {
+      // Never call markFailed once Razorpay has captured the payment —
+      // the money is taken and the backend webhook will process it.
+      if (orderIdRef.current && !paymentCaptured && !paymentCapturedButProcessingFailed) {
         razorpayService.markFailed(orderIdRef.current).catch(() => {});
       }
     }

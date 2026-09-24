@@ -36,6 +36,8 @@ import { NMData } from '../../types/Member/NMData';
 import { useToast } from '../../components/ui/Toast';
 import { useAppSelector } from '../../store/hooks';
 import AppHeader from '../../components/ui/appcomponents/AppHeader';
+import GoldAmountInput from '../../components/ui/appcomponents/GoldAmountInput';
+import { ratesService } from '../../api/services/ratesService';
 
 type RouteProps = RouteProp<RootStackParamList, 'SchemeJoin'>;
 type NavProps   = NativeStackNavigationProp<RootStackParamList, 'SchemeJoin'>;
@@ -644,8 +646,37 @@ export default function SchemeJoinScreen() {
 
   // Selected group from dropdown (FixedIns=Y)
   const [selectedGroup, setSelectedGroup] = useState<MemberSchemeGroup | null>(null);
-  // Custom amount (FixedIns=N)
   const [customAmount,  setCustomAmount]  = useState('');
+  const [weightInput,   setWeightInput]   = useState('');
+
+  // DigiGold: WeightLedger=Y + FixedIns=N → show dual amount↔weight input
+  const isDigiGold = scheme.WeightLedger === 'Y' && !isFixed;
+
+  const [goldRate,     setGoldRate]     = useState(0);
+  const [ratesLoading, setRatesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isDigiGold) return;
+    setRatesLoading(true);
+    ratesService.getTodayRate()
+      .then(r => { if (r?.GOLDRATE) setGoldRate(r.GOLDRATE); })
+      .catch(() => {})
+      .finally(() => setRatesLoading(false));
+  }, [isDigiGold]);
+
+  const handleAmountChange = (v: string) => {
+    const digits = v.replace(/[^0-9.]/g, '');
+    setCustomAmount(digits);
+    const amt = parseFloat(digits) || 0;
+    setWeightInput(goldRate > 0 && amt > 0 ? (amt / goldRate).toFixed(4) : '');
+  };
+
+  const handleWeightChange = (v: string) => {
+    const digits = v.replace(/[^0-9.]/g, '');
+    setWeightInput(digits);
+    const wt = parseFloat(digits) || 0;
+    setCustomAmount(goldRate > 0 && wt > 0 ? String(Math.round(wt * goldRate)) : '');
+  };
 
   // Auto-select first group when data loads
   useEffect(() => {
@@ -884,8 +915,16 @@ export default function SchemeJoinScreen() {
       ? `${dobYear}-${pad(dobMonth)}-${pad(dobDay)}T00:00:00`
       : '';
     const titleMap: Record<string, string> = { Male: 'Mr', Female: 'Mrs', Other: 'Mx' };
-    const groupCode = isFixed ? (selectedGroup?.GROUPCODE ?? '') : '';
-    const regNo     = isFixed ? String(selectedGroup?.CURRENTREGNO ?? '1') : '1';
+    const groupCode = isFixed
+      ? (selectedGroup?.GROUPCODE ?? '')
+      : scheme.GroupCodeForAllAmount === 'Y'
+      ? (scheme.GROUPCODE ?? '')
+      : '';
+    const regNo = isFixed
+      ? String(selectedGroup?.CURRENTREGNO ?? '1')
+      : scheme.GroupCodeForAllAmount === 'Y'
+      ? String(scheme.RegNo ?? '1')
+      : '1';
 
     return {
       newMember: {
@@ -1036,8 +1075,16 @@ export default function SchemeJoinScreen() {
       return;
     }
 
-    const groupCode = isFixed ? (selectedGroup?.GROUPCODE ?? '') : '';
-    const regno     = isFixed ? String(selectedGroup?.CURRENTREGNO ?? '') : '';
+    const groupCode = isFixed
+      ? (selectedGroup?.GROUPCODE ?? '')
+      : scheme.GroupCodeForAllAmount === 'Y'
+      ? (scheme.GROUPCODE ?? '')
+      : '';
+    const regno = isFixed
+      ? String(selectedGroup?.CURRENTREGNO ?? '')
+      : scheme.GroupCodeForAllAmount === 'Y'
+      ? String(scheme.RegNo ?? '1')
+      : '';
 
     pay(
       {
@@ -1177,6 +1224,25 @@ export default function SchemeJoinScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 4 }}>
                     <Ionicons name="alert-circle-outline" size={12} color="#E53935" />
                     <Text style={{ fontSize: 11, color: '#E53935', fontFamily: FONTS.family.regular }}>{fieldErrors.group}</Text>
+                  </View>
+                )}
+              </>
+            ) : isDigiGold ? (
+              <>
+                <GoldAmountInput
+                  amountInput={customAmount}
+                  weightInput={weightInput}
+                  onAmountChange={(v) => { handleAmountChange(v); clearErr('amount'); }}
+                  onWeightChange={(v) => { handleWeightChange(v); clearErr('amount'); }}
+                  goldRate={goldRate}
+                  ratesLoading={ratesLoading}
+                  presets={[500, 1000, 2000, 5000]}
+                  onPresetPress={(v) => { handleAmountChange(String(v)); clearErr('amount'); }}
+                />
+                {fieldErrors.amount && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 4 }}>
+                    <Ionicons name="alert-circle-outline" size={12} color="#E53935" />
+                    <Text style={{ fontSize: 11, color: '#E53935', fontFamily: FONTS.family.regular }}>{fieldErrors.amount}</Text>
                   </View>
                 )}
               </>

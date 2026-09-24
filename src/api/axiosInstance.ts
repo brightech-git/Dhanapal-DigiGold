@@ -9,16 +9,16 @@ export const axiosInstance = axios.create({
     'Content-Type': 'application/json',
     Accept: 'application/json',
   },
-  timeout: 15000,
+  timeout: 30000,
 });
 
 // Request interceptor — attach token from AsyncStorage
 axiosInstance.interceptors.request.use(async (config) => {
   const token = await AsyncStorage.getItem('@auth_token');
-  console.log("TokenFromStorage",token)
+  // console.log("TokenFromStorage",token)
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`;
-    console.log('[Axios] Token attached to request', { method: config.method?.toUpperCase(), url: `${config.baseURL}${config.url}` });
+    // console.log('[Axios] Token attached to request', { method: config.method?.toUpperCase(), url: `${config.baseURL}${config.url}` });
   } else {
     console.log('[Axios] No token found in storage');
   }

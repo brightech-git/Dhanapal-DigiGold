@@ -21,7 +21,7 @@ export const useAppContent = (id: string | number | undefined | null) => {
     setError(null);
     try {
       const result = await appContentService.getById(id);
-      console.log('[useAppContent] html data:', result?.data);
+      // console.log('[useAppContent] html data:', result?.data);
       setHtml(result?.data ?? '');
     } catch (err: any) {
       setError(err?.message ?? 'Failed to load content');

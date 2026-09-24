@@ -15,6 +15,9 @@ import {
 import { navigationRef } from './navigationRef';
 import { ApiScheme } from '../types/Scheme/Scheme';
 import { PPData, PaymentHistory } from '../types/Account/PhoneDetails';
+import { useAppVersion } from '../utils/useAppVersion';
+import UpdateScreen from '../screens/update/UpdateScreen';
+import LOGO from '../assets/company/logo.png';
 
 // SchemeItem = the real API shape (used as nav param for T&C + Join screens)
 export type SchemeItem = ApiScheme;
@@ -61,6 +64,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export default function RootNavigator() {
   const { COLORS, isDark } = useTheme();
   const [initialRoute, setInitialRoute] = useState<InitialRoute | null>(null);
+  const { isMaintenance, maintenanceMsg, updateAvailable, latestVersion, storeUrl, checked } = useAppVersion();
 
   useEffect(() => {
     (async () => {
@@ -102,12 +106,20 @@ export default function RootNavigator() {
     },
   };
 
-  if (!initialRoute) {
+  if (!initialRoute || !checked) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.surfacePage }}>
         <ActivityIndicator size="large" color={COLORS.brand} />
       </View>
     );
+  }
+
+  // if (isMaintenance) {
+  //   return <UpdateScreen mode="maintenance" maintenanceMsg={maintenanceMsg} logo={LOGO} />;
+  // }
+
+  if (updateAvailable) {
+    return <UpdateScreen mode="update" latestVersion={latestVersion} storeUrl={storeUrl} logo={LOGO} />;
   }
 
   return (
@@ -152,3 +164,4 @@ export default function RootNavigator() {
     </NavigationContainer>
   );
 }
+

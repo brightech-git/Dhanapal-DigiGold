@@ -16,6 +16,8 @@ export interface ApiScheme {
   Instalment: number;
   ADDNEWMEMBER: YN;
   GroupCodeForAllAmount: YN;
+  GROUPCODE: string;
+  RegNo: number;
   MetalType: MetalType | string;
 }
 
