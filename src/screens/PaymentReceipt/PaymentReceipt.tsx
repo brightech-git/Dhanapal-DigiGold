@@ -56,6 +56,7 @@ export default function PaymentReceipt() {
 
   const method = paymentMode(payment);
   const weight = parseFloat(String(payment.weight ?? '0')) || 0;
+  const rate = parseFloat(String(payment.rate ?? '0')) || 0;
   const groupRegNo = `${ppData.groupCode ?? 'N/A'}-${ppData.regNo ?? 'N/A'}`;
   const hasPaymentMode = (payment.chqBank && payment.chqBank !== 'N/A') || (payment.chq_CardNo && payment.chq_CardNo !== 'N/A');
 
@@ -176,16 +177,16 @@ export default function PaymentReceipt() {
           <View style={[st.table, { borderColor: COLORS.borderSubtle }]}>
             <View style={[st.tableHeader, { backgroundColor: COLORS.brand }]}>
               <Text style={[st.th, { flex: 0.5 }]}>S.No</Text>
-              <Text style={[st.th, { flex: 1.8 }]}>Group-Reg No</Text>
               <Text style={[st.th1, { flex: 1 }]}>Installment</Text>
-              {weight > 0 && <Text style={[st.th, { flex: 1 }]}>Weight</Text>}
+              {weight > 0 && <Text style={[st.th, { flex: 1 }]}>Weight (g)</Text>}
+              {weight > 0 && rate > 0 && <Text style={[st.th, { flex: 1.2 }]}>Rate (₹/g)</Text>}
               <Text style={[st.th, { flex: 1.2 }]}>Amount</Text>
             </View>
             <View style={[st.tableRow, { borderTopColor: COLORS.borderSubtle }]}>
               <Text style={[st.td, { flex: 0.5, color: COLORS.contentPrimary }]}>1</Text>
-              <Text style={[st.td, { flex: 1.8, color: COLORS.contentPrimary }]}>{groupRegNo}</Text>
               <Text style={[st.td, { flex: 1, color: COLORS.contentPrimary }]}>#{payment.installment}</Text>
               {weight > 0 && <Text style={[st.td, { flex: 1, color: COLORS.contentPrimary }]}>{weight.toFixed(3)}</Text>}
+              {weight > 0 && rate > 0 && <Text style={[st.td, { flex: 1.2, color: COLORS.contentPrimary }]}>{rate.toLocaleString('en-IN')}</Text>}
               <Text style={[st.td, { flex: 1.2, color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
                 {currency(payment.amount)}
               </Text>

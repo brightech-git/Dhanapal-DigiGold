@@ -1,8 +1,10 @@
 // src/screens/SchemePassbook/SchemePassbook.tsx
 //
 // Full scheme passbook page — shows a member's joined-scheme data section-wise:
-// hero summary, personal info, scheme details, payment summary,
-// a bank-statement-style payment history, and an installment due-date timeline.
+// hero summary, personal info, payment summary, a compact payment history
+// list, and (fixed schemes only) an instalment due-date timeline.
+// Layout adapts to the scheme type (Flexi Gold / Gold Instalment / Fixed
+// Instalment) — see src/utils/schemeKind.ts.
 // Data source: PPData (see src/types/Account/PhoneDetails.ts), passed in as a
 // nav param from GlassSchemeCard / wherever the scheme list lives.
 
@@ -24,70 +26,20 @@ import { useTheme } from '../../theme';
 import { RootStackParamList } from '../../navigation/RootNavigator';
 import { PPData, PaymentHistory } from '../../types/Account/PhoneDetails';
 import AppHeader from '../../components/ui/appcomponents/AppHeader';
+import {
+  getSchemeKind, isWeightKind, isFixedKind, KIND_META,
+  parseDate, formatDate, formatDay, daysUntil, startOfDay,
+  num, inr, grams, schemeStatus, paymentMethod,
+} from '../../utils/schemeKind';
 
 type RouteProps = RouteProp<RootStackParamList, 'SchemePassbook'>;
 type NavProps = NativeStackNavigationProp<RootStackParamList, 'SchemePassbook'>;
-
-// ── Helpers ───────────────────────────────────────────────────────
-function formatDate(raw?: string | null): string {
-  if (!raw) return '—';
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function formatDay(raw?: string | null): string {
-  if (!raw) return '';
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-IN', { weekday: 'short' });
-}
-
-function formatTime(raw?: string | null): string {
-  if (!raw) return '';
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-}
-
-function currency(v: number | string | null | undefined): string {
-  const n = typeof v === 'string' ? parseFloat(v) : (v ?? 0);
-  if (isNaN(n)) return '₹0';
-  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-}
-
-function daysUntil(raw?: string | null): number | null {
-  if (!raw) return null;
-  const target = new Date(raw);
-  if (isNaN(target.getTime())) return null;
-  const today = new Date();
-  const a = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
-  const b = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  return Math.round((a - b) / 86400000);
-}
-
-function schemeStatus(pp: PPData): 'active' | 'pending' | 'completed' {
-  const ct = pp.schemeClosedSummary?.closeType ?? '';
-  if (ct && ct.trim() !== '') return 'completed';
-  const paid = parseInt(pp.schemeSummary?.schemaSummaryTransBalance?.insPaid ?? '0');
-  return paid > 0 ? 'active' : 'pending';
-}
 
 const STATUS_CLR: Record<string, string> = {
   active: '#34D399',
   pending: '#FBBF24',
   completed: '#F5D78E',
 };
-
-// Guess a payment-method icon/label from bank/chq metadata.
-function paymentMethod(p: PaymentHistory): { label: string; icon: keyof typeof Ionicons.glyphMap } {
-  const bank = (p.chqBank ?? '').toLowerCase();
-  if (bank.includes('razorpay') || (p.chq_CardNo ?? '').startsWith('pay_')) {
-    return { label: 'Online Payment', icon: 'phone-portrait-outline' };
-  }
-  if (bank) return { label: p.chqBank, icon: 'business-outline' };
-  return { label: 'Cash', icon: 'cash-outline' };
-}
 
 // ── Section wrapper ──────────────────────────────────────────────
 function Section({
@@ -161,13 +113,18 @@ function Section({
 }
 
 // ── Key / value row ──────────────────────────────────────────────
-function Row({ label, value, valueColor, last }: { label: string; value: string; valueColor?: string; last?: boolean }) {
+function Row({
+  label, value, icon, valueColor, last,
+}: { label: string; value: string; icon?: keyof typeof Ionicons.glyphMap; valueColor?: string; last?: boolean }) {
   const { COLORS, FONTS, SIZES } = useTheme();
   return (
     <View style={[s.row, !last && { borderBottomWidth: 1, borderBottomColor: COLORS.borderSubtle + '90' }]}>
-      <Text style={[s.rowLabel, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular, fontSize: SIZES.font.sm }]}>
-        {label}
-      </Text>
+      <View style={s.rowLabelWrap}>
+        {icon && <Ionicons name={icon} size={14} color={COLORS.contentMuted} />}
+        <Text style={[{ color: COLORS.contentMuted, fontFamily: FONTS.family.regular, fontSize: SIZES.font.sm }]}>
+          {label}
+        </Text>
+      </View>
       <Text
         numberOfLines={2}
         style={[s.rowValue, { color: valueColor ?? COLORS.contentPrimary, fontFamily: FONTS.family.semiBold, fontSize: SIZES.font.sm }]}
@@ -178,134 +135,99 @@ function Row({ label, value, valueColor, last }: { label: string; value: string;
   );
 }
 
-// ── Payment history — bank-statement style transaction card ──────
-function TransactionCard({ item, isLast, onView }: { item: PaymentHistory; isLast: boolean; onView: () => void }) {
-  const { COLORS, FONTS, SIZES } = useTheme();
+// ── Payment history — compact single-row transaction ─────────────
+function TransactionRow({
+  item, isLast, showWeight, isFlexi, onView,
+}: { item: PaymentHistory; isLast: boolean; showWeight: boolean; isFlexi: boolean; onView: () => void }) {
+  const { COLORS, FONTS } = useTheme();
   const method = paymentMethod(item);
+  const weight = num(item.weight);
 
   return (
-    <View style={[s.txnCard, !isLast && s.txnCardGap]}>
-      {/* Left rail: icon + connecting line */}
-      <View style={s.txnRail}>
-        <View style={[s.txnIconWrap, { backgroundColor: COLORS.success + '14', borderColor: COLORS.success + '30' }]}>
-          <Ionicons name={method.icon} size={16} color={COLORS.success} />
-        </View>
-        {!isLast && <View style={[s.txnRailLine, { backgroundColor: COLORS.borderSubtle }]} />}
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onView}
+      style={[s.txnRow, !isLast && { borderBottomWidth: 1, borderBottomColor: COLORS.borderSubtle + '90' }]}
+    >
+      <View style={[s.txnIconWrap, { backgroundColor: COLORS.success + '14' }]}>
+        <Ionicons name={method.icon} size={16} color={COLORS.success} />
       </View>
 
-      {/* Card body */}
-      <View style={[s.txnBody, { backgroundColor: COLORS.surfaceMuted, borderColor: COLORS.borderSubtle }]}>
-        <View style={s.txnTopRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={[s.txnTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold, fontSize: SIZES.font.sm }]}>
-              Installment #{item.installment}
-            </Text>
-            <Text style={[s.txnSub, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-              {formatDay(item.updateTime)}, {formatDate(item.updateTime)} · {formatTime(item.updateTime)}
-            </Text>
-          </View>
+      <View style={s.txnMid}>
+        <Text style={[s.txnTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]} numberOfLines={1}>
+          {isFlexi ? 'Payment' : 'Instalment'} #{item.installment}
+        </Text>
+        <Text style={[s.txnSub, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]} numberOfLines={1}>
+          {formatDate(item.updateTime)}  ·  {method.label}  ·  #{item.receiptNo}
+        </Text>
+      </View>
 
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[s.txnAmount, { color: COLORS.success, fontFamily: FONTS.family.bold, fontSize: SIZES.font.lg }]}>
-              +{currency(item.amount)}
-            </Text>
-            <View style={s.txnStatusRow}>
-              <View style={[s.statusPill, { backgroundColor: COLORS.success + '16' }]}>
-                <View style={[s.statusDot, { backgroundColor: COLORS.success }]} />
-                <Text style={[s.statusPillTxt, { color: COLORS.success, fontFamily: FONTS.family.semiBold }]}>PAID</Text>
-              </View>
-              <TouchableOpacity
-                style={[s.txnViewBtn, { backgroundColor: COLORS.brand + '14', borderColor: COLORS.brand + '30' }]}
-                activeOpacity={0.75}
-                onPress={onView}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Ionicons name="eye" size={18} color={COLORS.brand} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
-        <View style={[s.txnDivider, { backgroundColor: COLORS.border + '80' }]} />
-
-        <View style={s.txnFooter}>
-          <View style={s.txnFooterItem}>
-            <Text style={[s.txnFooterLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>Receipt No</Text>
-            <Text style={[s.txnFooterVal, { color: COLORS.contentSecondary, fontFamily: FONTS.family.semiBold }]}>{item.receiptNo}</Text>
-          </View>
-          {item.weight ? (
-            <View style={s.txnFooterItem}>
-              <Text style={[s.txnFooterLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>Gold Weight</Text>
-              <Text style={[s.txnFooterVal, { color: COLORS.contentSecondary, fontFamily: FONTS.family.semiBold }]}>{item.weight} g</Text>
-            </View>
-          ) : null}
-          <View style={s.txnFooterItem}>
-            <Text style={[s.txnFooterLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>Method</Text>
-            <Text style={[s.txnFooterVal, { color: COLORS.contentSecondary, fontFamily: FONTS.family.semiBold }]}>{method.label}</Text>
-          </View>
-        </View>
-
-        {item.chq_CardNo ? (
-          <Text numberOfLines={1} style={[s.txnRef, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-            Txn / Ref ID: {item.chq_CardNo}
+      <View style={s.txnRight}>
+        <Text style={[s.txnAmount, { color: COLORS.success, fontFamily: FONTS.family.bold }]} numberOfLines={1}>
+          +{inr(item.amount)}
+        </Text>
+        {showWeight && weight > 0 ? (
+          <Text style={[s.txnWeight, { color: COLORS.accentDeep, fontFamily: FONTS.family.semiBold }]} numberOfLines={1}>
+            {grams(weight)}
           </Text>
         ) : null}
       </View>
-    </View>
+
+      <Ionicons name="chevron-forward" size={16} color={COLORS.contentMuted} style={{ marginLeft: 6 }} />
+    </TouchableOpacity>
   );
 }
 
-// ── Upcoming due dates — vertical installment timeline ────────────
-function DueTimelineItem({
-  date, index, isNext, isLast,
-}: { date: string; index: number; isNext: boolean; isLast: boolean }) {
-  const { COLORS, FONTS, SIZES } = useTheme();
+// ── Upcoming due dates — compact rows ────────────────────────────
+function DueRow({
+  date, number, isNext, isLast, amount,
+}: { date: string; number: number; isNext: boolean; isLast: boolean; amount: number }) {
+  const { COLORS, FONTS } = useTheme();
   const remaining = daysUntil(date);
+  const overdue = remaining !== null && remaining < 0;
   const remainingLabel =
     remaining === null ? '' :
     remaining === 0 ? 'Due today' :
     remaining === 1 ? 'Due tomorrow' :
     remaining > 0 ? `In ${remaining} days` : 'Overdue';
+  const accent = overdue ? (COLORS.danger ?? COLORS.error) : COLORS.brand;
 
   return (
-    <View style={[s.dueItem, !isLast && s.dueItemGap]}>
-      <View style={s.txnRail}>
-        <View
-          style={[
-            s.dueDot,
-            {
-              backgroundColor: isNext ? COLORS.brand : COLORS.surface,
-              borderColor: isNext ? COLORS.brand : COLORS.border,
-            },
-          ]}
-        >
-          <Text style={[s.dueDotTxt, { color: isNext ? COLORS.white : COLORS.contentMuted, fontFamily: FONTS.family.bold }]}>
-            {index + 1}
-          </Text>
-        </View>
-        {!isLast && <View style={[s.txnRailLine, { backgroundColor: COLORS.borderSubtle }]} />}
-      </View>
-
+    <View style={[s.txnRow, !isLast && { borderBottomWidth: 1, borderBottomColor: COLORS.borderSubtle + '90' }]}>
       <View
         style={[
-          s.dueBody,
+          s.dueDot,
           {
-            backgroundColor: isNext ? COLORS.brand + '0C' : COLORS.surfaceMuted,
-            borderColor: isNext ? COLORS.brand + '35' : COLORS.borderSubtle,
+            backgroundColor: isNext ? accent : COLORS.surface,
+            borderColor: isNext ? accent : COLORS.border,
           },
         ]}
       >
-        <View>
-          <Text style={[s.dueDate, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold, fontSize: SIZES.font.sm }]}>
-            {formatDate(date)}
+        <Text style={[s.dueDotTxt, { color: isNext ? COLORS.white : COLORS.contentMuted, fontFamily: FONTS.family.bold }]}>
+          {number}
+        </Text>
+      </View>
+
+      <View style={s.txnMid}>
+        <Text style={[s.txnTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
+          {formatDate(date)}
+        </Text>
+        <Text style={[s.txnSub, { color: overdue ? accent : COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
+          {formatDay(date)}  ·  {remainingLabel}
+        </Text>
+      </View>
+
+      <View style={s.txnRight}>
+        {amount > 0 && (
+          <Text style={[s.txnAmount, { color: COLORS.contentSecondary, fontFamily: FONTS.family.semiBold }]}>
+            {inr(amount)}
           </Text>
-          <Text style={[s.dueDay, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-            {formatDay(date)}  ·  {remainingLabel}
-          </Text>
-        </View>
+        )}
         {isNext && (
-          <View style={[s.nextTag, { backgroundColor: COLORS.brand }]}>
-            <Text style={[s.nextTagTxt, { color: COLORS.white, fontFamily: FONTS.family.bold }]}>NEXT</Text>
+          <View style={[s.nextTag, { backgroundColor: accent }]}>
+            <Text style={[s.nextTagTxt, { color: COLORS.white, fontFamily: FONTS.family.bold }]}>
+              {overdue ? 'OVERDUE' : 'NEXT'}
+            </Text>
           </View>
         )}
       </View>
@@ -315,48 +237,107 @@ function DueTimelineItem({
 
 // ── Screen ────────────────────────────────────────────────────────
 export default function SchemePassbook() {
-  const { COLORS, FONTS, SIZES } = useTheme();
+  const { COLORS, FONTS } = useTheme();
   const navigation = useNavigation<NavProps>();
   const route = useRoute<RouteProps>();
   const ppData = route.params?.ppData as PPData;
   const [dueExpanded, setDueExpanded] = useState(false);
   const [personalExpanded, setPersonalExpanded] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  const summary  = ppData.schemeSummary;
+  const bal      = summary?.schemaSummaryTransBalance;
+  const kind     = getSchemeKind(ppData);
+  const isWeight = isWeightKind(kind);
+  const isFixed  = isFixedKind(kind);
+  const meta     = KIND_META[kind];
 
   const status = schemeStatus(ppData);
-  const done = status === 'completed';
+  const done   = status === 'completed';
 
-  const paid = parseInt(ppData.schemeSummary?.schemaSummaryTransBalance?.insPaid ?? '0');
-  const total = parseInt(ppData.schemeSummary?.instalment ?? '1');
-  const pct = total > 0 ? Math.min(paid / total, 1) : 0;
+  const paid      = parseInt(bal?.insPaid ?? '0', 10) || 0;
+  const total     = parseInt(summary?.instalment ?? '0', 10) || 0;
+  const remaining = Math.max(total - paid, 0);
+  const pct       = total > 0 ? Math.min(paid / total, 1) : 0;
+  const allPaid   = isFixed && total > 0 && remaining === 0;
+
+  const invested    = num(ppData.totalAmount ?? bal?.amtrecd);
+  const monthlyAmt  = num(ppData.amount);
+  const totalWeight = num(summary?.totalWeight);
+  const lastWeight  = num(summary?.lastWeight);
 
   const history = useMemo(
     () => [...(ppData.paymentHistoryList ?? [])].sort(
-      (a, b) => parseInt(b.installment) - parseInt(a.installment),
+      (a, b) => parseInt(b.installment, 10) - parseInt(a.installment, 10),
     ),
     [ppData.paymentHistoryList],
   );
+  const payCount = history.length || paid;
+  const HISTORY_PREVIEW = 5;
+  const visibleHistory = historyExpanded ? history : history.slice(0, HISTORY_PREVIEW);
+
+  // Tenure progress (join → maturity) for flexi schemes
+  const joinD = parseDate(ppData.joinDate);
+  const matD  = parseDate(ppData.maturityDate);
+  const tenurePct = joinD && matD && matD > joinD
+    ? Math.min(Math.max((Date.now() - joinD.getTime()) / (matD.getTime() - joinD.getTime()), 0), 1)
+    : 0;
+  const daysToMaturity = matD ? Math.max(Math.round((startOfDay(matD) - startOfDay(new Date())) / 86400000), 0) : 0;
 
   const hg = (COLORS as any)?.gradient?.orangeDeep ?? ['#8E0F42', '#C2185B'];
   const deep = (COLORS as any)?.orangeDeep ?? '#6B0930';
   const gradColors: [string, string, string] = [hg[1] ?? '#C2185B', hg[0] ?? '#8E0F42', deep];
 
-  const bal = ppData.schemeSummary?.schemaSummaryTransBalance;
+  // Hero stat row (3 columns) per scheme type
+  const heroStats: { label: string; value: string }[] = (() => {
+    switch (kind) {
+      case 'FLEXI_GOLD':
+        return [
+          { label: 'Invested',   value: inr(invested) },
+          { label: 'Payments',   value: String(payCount) },
+          { label: 'Last Added', value: lastWeight ? grams(lastWeight) : '—' },
+        ];
+      case 'FIXED_GOLD':
+        return [
+          { label: 'Invested',   value: inr(invested) },
+          { label: 'Paid',       value: `${paid}/${total}` },
+          { label: 'Last Added', value: lastWeight ? grams(lastWeight) : '—' },
+        ];
+      case 'FIXED_AMOUNT':
+        return [
+          { label: 'Monthly',    value: monthlyAmt ? inr(monthlyAmt) : '—' },
+          { label: 'Paid',       value: `${paid}/${total}` },
+          { label: 'Remaining',  value: done ? '—' : `${remaining}` },
+        ];
+      default:
+        return [
+          { label: 'Payments',   value: String(payCount) },
+          { label: 'Last Paid',  value: formatDate(ppData.lastPaidDate) },
+          { label: 'Maturity',   value: formatDate(ppData.maturityDate) },
+        ];
+    }
+  })();
 
-  // Bonus is intentionally not surfaced anywhere on this page — only real,
-  // always-present figures from the API are shown.
-  const remainingInstallments = Math.max(total - paid, 0);
+  const progressNote = done
+    ? 'Scheme completed'
+    : !isFixed
+      ? `Pay any amount, anytime  •  ${daysToMaturity} days to maturity`
+      : allPaid
+        ? 'All instalments paid'
+        : parseDate(ppData.nextDueDate)
+          ? `Next due: ${formatDate(ppData.nextDueDate)}`
+          : `${remaining} instalment${remaining === 1 ? '' : 's'} remaining`;
 
-  // Middle hero stat: how many installments are still left to pay.
-  const middleStat = done
-    ? { label: 'Remaining', value: 'Completed' }
-    : { label: 'Remaining', value: `${remainingInstallments} EMI${remainingInstallments === 1 ? '' : 's'}` };
+  const payLabel = !isFixed
+    ? (isWeight ? 'Buy More Gold' : 'Add Payment')
+    : `Pay Instalment ${paid + 1}`;
 
-  const remainingDueDates = ppData.remainingDueDates ?? [];
+  const remainingDueDates = isFixed ? (ppData.remainingDueDates ?? []) : [];
   const visibleDueDates = dueExpanded ? remainingDueDates : remainingDueDates.slice(0, 1);
 
   return (
     <SafeAreaView style={[s.flex, { backgroundColor: COLORS.surfacePage }]} edges={['bottom']}>
-      <AppHeader title="Scheme Passbook" subtitle={ppData.schemeSummary?.schemeName} showBack  />
+      <AppHeader title="Scheme Passbook" subtitle={summary?.schemeName} showBack />
 
       <ScrollView
         style={s.flex}
@@ -371,88 +352,107 @@ export default function SchemePassbook() {
             end={{ x: 1, y: 1 }}
             style={s.hero}
           >
+            <View style={[s.deco, s.decoLg]} />
+            <View style={[s.deco, s.decoSm]} />
+
             <View style={s.heroTopRow}>
               <View style={s.heroIconWrap}>
-                <Ionicons name="diamond-outline" size={20} color="#fff" />
+                <Ionicons name={isWeight ? 'diamond-outline' : 'wallet-outline'} size={20} color="#fff" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 11 }}>
+                <Text style={[s.heroTitle, { fontFamily: FONTS.family.bold }]} numberOfLines={1}>
+                  {summary?.schemeName ?? '—'}
+                </Text>
+                <Text style={[s.heroSub, { fontFamily: FONTS.family.regular }]} numberOfLines={1}>
+                  {ppData.groupCode ? `${ppData.groupCode} - ` : 'Reg No '}{ppData.regNo}
+                  {ppData.personalInfo?.personalId ? `  •  ID ${ppData.personalInfo.personalId}` : ''}
+                </Text>
               </View>
               <View style={[s.badge, { backgroundColor: STATUS_CLR[status] + 'E6' }]}>
                 <Text style={[s.badgeTxt, { fontFamily: FONTS.family.bold }]}>{status.toUpperCase()}</Text>
               </View>
             </View>
 
-            <Text style={[s.heroTitle, { fontFamily: FONTS.family.bold }]} numberOfLines={1}>
-              {ppData.schemeSummary?.schemeName ?? '—'}
+            {/* Main figure */}
+            <Text style={[s.heroBigLbl, { fontFamily: FONTS.family.medium }]}>
+              {isWeight ? 'Gold Accumulated' : 'Total Saved'}
             </Text>
-            <Text style={[s.heroSub, { fontFamily: FONTS.family.semiBold }]}>
-              Reg No: {ppData.regNo} - GroupCode:  {ppData.groupCode}   •  ID: {ppData.personalInfo?.personalId}
+            <Text style={[s.heroBig, { fontFamily: FONTS.family.bold }]} numberOfLines={1} adjustsFontSizeToFit>
+              {isWeight ? grams(totalWeight) : inr(invested)}
             </Text>
+            <View style={s.kindChip}>
+              <Ionicons name={meta.icon} size={11} color="#fff" />
+              <Text style={[s.kindTxt, { fontFamily: FONTS.family.semiBold }]}>
+                {meta.label}{isFixed && total > 0 ? `  •  ${total} Instalments` : '  •  Flexible Pay'}
+              </Text>
+            </View>
 
+            {/* 3-column stats */}
             <View style={s.heroStatsRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[s.heroVal, { fontFamily: FONTS.family.bold }]}>{currency(ppData.totalAmount)}</Text>
-                <Text style={[s.heroLbl, { fontFamily: FONTS.family.regular }]}>Invested</Text>
-              </View>
-              <View style={s.heroDiv} />
-              <View style={{ flex: 1 }}>
-                <Text style={[s.heroVal, { fontFamily: FONTS.family.bold }]} numberOfLines={1}>{middleStat.value}</Text>
-                <Text style={[s.heroLbl, { fontFamily: FONTS.family.regular }]}>{middleStat.label}</Text>
-              </View>
-              <View style={s.heroDiv} />
-              <View style={{ flex: 1 }}>
-                <Text style={[s.heroVal, { fontFamily: FONTS.family.bold }]}>{paid}/{total}</Text>
-                <Text style={[s.heroLbl, { fontFamily: FONTS.family.regular }]}>EMIs Paid</Text>
-              </View>
+              {heroStats.map((st, i) => (
+                <React.Fragment key={st.label}>
+                  {i > 0 && <View style={s.heroDiv} />}
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.heroVal, { fontFamily: FONTS.family.bold }]} numberOfLines={1} adjustsFontSizeToFit>
+                      {st.value}
+                    </Text>
+                    <Text style={[s.heroLbl, { fontFamily: FONTS.family.regular }]}>{st.label}</Text>
+                  </View>
+                </React.Fragment>
+              ))}
             </View>
 
-            <View style={s.heroTrack}>
-              <View style={[s.heroFill, { width: `${Math.min(pct * 100, 100)}%` as any }]} />
-            </View>
+            {/* Progress: instalment blocks for fixed, tenure bar for flexi */}
+            {isFixed && total > 0 && total <= 24 ? (
+              <View style={s.segRow}>
+                {Array.from({ length: total }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[s.seg, { backgroundColor: done || i < paid ? '#fff' : 'rgba(255,255,255,0.25)' }]}
+                  />
+                ))}
+              </View>
+            ) : (
+              <View style={s.heroTrack}>
+                <View style={[s.heroFill, { width: `${Math.max((done ? 1 : isFixed ? pct : tenurePct) * 100, 2)}%` }]} />
+              </View>
+            )}
             <View style={s.heroMetaRow}>
               <Text style={[s.heroNext, { fontFamily: FONTS.family.regular }]} numberOfLines={1}>
-                {done ? 'Scheme completed' : `Next due: ${formatDate(ppData.nextDueDate)}`}
+                {progressNote}
               </Text>
-              <Text style={[s.heroPct, { fontFamily: FONTS.family.semiBold }]}>{Math.round(pct * 100)}%</Text>
+              {isFixed && (
+                <Text style={[s.heroPct, { fontFamily: FONTS.family.semiBold }]}>{Math.round(pct * 100)}%</Text>
+              )}
             </View>
 
             {/* Join / Last Paid / Maturity — quick-glance dates */}
             <View style={s.heroDatesRow}>
-              <View style={s.heroDateItem}>
-                <View style={s.heroDateTopRow}>
-                  <Ionicons name="log-in-outline" size={11} color="rgba(255,255,255,0.75)" />
-                  <Text style={[s.heroDateLbl, { fontFamily: FONTS.family.regular }]}>Joined</Text>
+              {[
+                { icon: 'log-in-outline' as const,         lbl: 'Joined',    val: ppData.joinDate },
+                { icon: 'checkmark-done-outline' as const, lbl: 'Last Paid', val: ppData.lastPaidDate },
+                { icon: 'flag-outline' as const,           lbl: 'Maturity',  val: ppData.maturityDate },
+              ].map(d => (
+                <View key={d.lbl} style={s.heroDateItem}>
+                  <View style={s.heroDateTopRow}>
+                    <Ionicons name={d.icon} size={11} color="rgba(255,255,255,0.75)" />
+                    <Text style={[s.heroDateLbl, { fontFamily: FONTS.family.regular }]}>{d.lbl}</Text>
+                  </View>
+                  <Text style={[s.heroDateVal, { fontFamily: FONTS.family.semiBold }]} numberOfLines={1}>
+                    {formatDate(d.val)}
+                  </Text>
                 </View>
-                <Text style={[s.heroDateVal, { fontFamily: FONTS.family.semiBold }]} numberOfLines={1}>
-                  {formatDate(ppData.joinDate)}
-                </Text>
-              </View>
-              <View style={s.heroDateItem}>
-                <View style={s.heroDateTopRow}>
-                  <Ionicons name="checkmark-done-outline" size={11} color="rgba(255,255,255,0.75)" />
-                  <Text style={[s.heroDateLbl, { fontFamily: FONTS.family.regular }]}>Last Paid</Text>
-                </View>
-                <Text style={[s.heroDateVal, { fontFamily: FONTS.family.semiBold }]} numberOfLines={1}>
-                  {formatDate(ppData.lastPaidDate)}
-                </Text>
-              </View>
-              <View style={s.heroDateItem}>
-                <View style={s.heroDateTopRow}>
-                  <Ionicons name="flag-outline" size={11} color="rgba(255,255,255,0.75)" />
-                  <Text style={[s.heroDateLbl, { fontFamily: FONTS.family.regular }]}>Maturity</Text>
-                </View>
-                <Text style={[s.heroDateVal, { fontFamily: FONTS.family.semiBold }]} numberOfLines={1}>
-                  {formatDate(ppData.maturityDate)}
-                </Text>
-              </View>
+              ))}
             </View>
 
-            {!done && (
+            {!done && !allPaid && (
               <TouchableOpacity
                 style={s.payBtn}
                 activeOpacity={0.9}
                 onPress={() => navigation.navigate('PayInstallment', { ppData })}
               >
-                <Ionicons name="card-outline" size={15} color={deep} />
-                <Text style={[s.payBtnTxt, { color: deep, fontFamily: FONTS.family.bold }]}>Pay Next Installment</Text>
+                <Ionicons name={!isFixed && isWeight ? 'add-circle-outline' : 'card-outline'} size={16} color={deep} />
+                <Text style={[s.payBtnTxt, { color: deep, fontFamily: FONTS.family.bold }]}>{payLabel}</Text>
               </TouchableOpacity>
             )}
           </LinearGradient>
@@ -468,36 +468,60 @@ export default function SchemePassbook() {
           previewName={ppData.personalInfo?.pName ?? ppData.pName}
           previewMobile={ppData.personalInfo?.mobile}
         >
-          <Row label="Name" value={ppData.personalInfo?.pName ?? ppData.pName} />
-          <Row label="Personal ID" value={ppData.personalInfo?.personalId ?? '—'} />
-          <Row label="Mobile" value={ppData.personalInfo?.mobile ?? '—'} />
+          <Row icon="person-outline" label="Name" value={ppData.personalInfo?.pName ?? ppData.pName} />
+          <Row icon="id-card-outline" label="Personal ID" value={ppData.personalInfo?.personalId || '—'} />
+          <Row icon="call-outline" label="Mobile" value={ppData.personalInfo?.mobile || '—'} />
           <Row
+            icon="home-outline"
             label="Address"
-            value={[
+            value={[...new Set([
               ppData.personalInfo?.doorNo,
               ppData.personalInfo?.address1,
               ppData.personalInfo?.address2,
               ppData.personalInfo?.area,
               ppData.personalInfo?.city,
-            ].filter(Boolean).join(', ') || '—'}
+            ].filter(Boolean))].join(', ') || '—'}
           />
           <Row
+            icon="location-outline"
             label="State / Pin"
-            value={`${ppData.personalInfo?.state ?? '—'} - ${ppData.personalInfo?.pinCode ?? '—'}`}
-          />
-          <Row label="Country" value={ppData.personalInfo?.country ?? '—'} last />
-        </Section>
-        
-        {/* ── Payment summary ───────────────────────────────── */}
-        <Section title="Payment Summary" icon="wallet-outline">
-          <Row label="Amount Received" value={currency(bal?.amtrecd)} />
-          <Row label="Installments Paid" value={`${paid} of ${total}`} />
-          <Row
-            label="Installments Remaining"
-            value={done ? 'Completed' : String(remainingInstallments)}
-            valueColor={done ? COLORS.success : COLORS.brand}
+            value={`${ppData.personalInfo?.state || '—'} - ${ppData.personalInfo?.pinCode || '—'}`}
             last
           />
+        </Section>
+
+        {/* ── Payment summary ───────────────────────────────── */}
+        <Section title="Payment Summary" icon="wallet-outline">
+          <Row icon="pricetag-outline" label="Scheme Type" value={meta.label} />
+          {isFixed ? (
+            <>
+              {monthlyAmt > 0 && <Row icon="repeat-outline" label="Instalment Amount" value={inr(monthlyAmt)} />}
+              <Row icon="checkmark-circle-outline" label="Instalments Paid" value={`${paid} of ${total}`} />
+              <Row
+                icon="hourglass-outline"
+                label="Instalments Remaining"
+                value={done || allPaid ? 'Completed' : String(remaining)}
+                valueColor={done || allPaid ? COLORS.success : COLORS.brand}
+              />
+              {!isWeight && monthlyAmt > 0 && !done && (
+                <Row icon="calculator-outline" label="Balance Payable" value={inr(monthlyAmt * remaining)} />
+              )}
+            </>
+          ) : (
+            <>
+              <Row icon="receipt-outline" label="Payments Made" value={String(payCount)} />
+              <Row icon="time-outline" label="Days to Maturity" value={done ? 'Completed' : `${daysToMaturity} days`} />
+            </>
+          )}
+          {isWeight && (
+            <Row
+              icon="add-circle-outline"
+              label="Last Weight Added"
+              value={lastWeight ? grams(lastWeight) : '—'}
+              valueColor={COLORS.accentDeep}
+            />
+          )}
+          <Row icon="cash-outline" label="Amount Received" value={inr(bal?.amtrecd)} last />
 
           <View style={[s.summaryTotalBox, { backgroundColor: COLORS.brand + '0A', borderColor: COLORS.brand + '25' }]}>
             <View style={s.summaryTotalRow}>
@@ -505,9 +529,22 @@ export default function SchemePassbook() {
                 Total Amount Paid
               </Text>
               <Text style={[s.summaryGrandVal, { color: COLORS.brand, fontFamily: FONTS.family.bold }]}>
-                {currency(ppData.totalAmount)}
+                {inr(invested)}
               </Text>
             </View>
+            {isWeight && (
+              <>
+                <View style={[s.summaryTotalDivider, { backgroundColor: COLORS.brand + '20' }]} />
+                <View style={s.summaryTotalRow}>
+                  <Text style={[s.summaryGrandLbl, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
+                    Total Gold Weight
+                  </Text>
+                  <Text style={[s.summaryGrandVal, { color: COLORS.accentDeep, fontFamily: FONTS.family.bold }]}>
+                    {grams(totalWeight)}
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
         </Section>
 
@@ -521,33 +558,46 @@ export default function SchemePassbook() {
               </Text>
             </View>
           ) : (
-            <View>
-              {history.map((item, idx) => (
-                <TransactionCard
+            <>
+              {visibleHistory.map((item, idx) => (
+                <TransactionRow
                   key={`${item.receiptNo}-${idx}`}
                   item={item}
-                  isLast={idx === history.length - 1}
+                  isLast={idx === visibleHistory.length - 1}
+                  showWeight={isWeight}
+                  isFlexi={!isFixed}
                   onView={() => navigation.navigate('PaymentReceipt', { ppData, payment: item })}
                 />
               ))}
-            </View>
+              {history.length > HISTORY_PREVIEW && (
+                <TouchableOpacity
+                  style={[s.expandBtn, { borderColor: COLORS.borderSubtle, backgroundColor: COLORS.surfaceMuted }]}
+                  activeOpacity={0.8}
+                  onPress={() => setHistoryExpanded(v => !v)}
+                >
+                  <Text style={[s.expandBtnTxt, { color: COLORS.brand, fontFamily: FONTS.family.semiBold }]}>
+                    {historyExpanded ? 'Show Less' : `View All ${history.length} Payments`}
+                  </Text>
+                  <Ionicons name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={14} color={COLORS.brand} />
+                </TouchableOpacity>
+              )}
+            </>
           )}
         </Section>
 
-        {/* ── Remaining due dates ───────────────────────────── */}
+        {/* ── Remaining due dates (fixed schemes only) ──────── */}
         {!done && remainingDueDates.length > 0 && (
           <Section title="Upcoming Due Dates" icon="calendar-outline" count={remainingDueDates.length}>
-            <View>
-              {visibleDueDates.map((d, i) => (
-                <DueTimelineItem
-                  key={`${d}-${i}`}
-                  date={d}
-                  index={i}
-                  isNext={i === 0}
-                  isLast={i === visibleDueDates.length - 1}
-                />
-              ))}
-            </View>
+            {visibleDueDates.map((d, i) => (
+              <DueRow
+                key={`${d}-${i}`}
+                date={d}
+                number={paid + i + 1}
+                amount={monthlyAmt}
+                isNext={i === 0}
+                isLast={i === visibleDueDates.length - 1}
+              />
+            ))}
 
             {remainingDueDates.length > 1 && (
               <TouchableOpacity
@@ -584,27 +634,45 @@ const s = StyleSheet.create({
     elevation: 6,
     marginBottom: 16,
   },
-  hero: { borderRadius: 22, padding: 18 },
-  heroTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  hero: { borderRadius: 22, padding: 18, overflow: 'hidden' },
+  deco: { position: 'absolute', borderRadius: 999, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
+  decoLg: { width: 220, height: 220, right: -80, top: -100 },
+  decoSm: { width: 130, height: 130, right: -30, top: -50, backgroundColor: 'rgba(255,255,255,0.05)' },
+
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
   heroIconWrap: {
-    width: 38, height: 38, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.22)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)',
+    width: 40, height: 40, borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.2)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)',
     alignItems: 'center', justifyContent: 'center',
   },
-  badge: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10 },
-  badgeTxt: { color: '#1A1303', fontSize: 9, letterSpacing: 0.4 },
-  heroTitle: { color: '#fff', fontSize: 19, letterSpacing: -0.2 },
-  heroSub: { color: 'rgba(255,255,255,0.78)', fontSize: 11, marginTop: 2, marginBottom: 16 },
+  badge: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20, marginLeft: 8 },
+  badgeTxt: { color: '#1A1303', fontSize: 9, letterSpacing: 0.5 },
+  heroTitle: { color: '#fff', fontSize: 17, letterSpacing: 0.1 },
+  heroSub: { color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 2 },
 
-  heroStatsRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  heroBigLbl: { color: 'rgba(255,255,255,0.78)', fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  heroBig: { color: '#fff', fontSize: 32, letterSpacing: -0.5, marginTop: 2 },
+  kindChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+    marginTop: 8, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.16)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)',
+  },
+  kindTxt: { color: '#fff', fontSize: 10, letterSpacing: 0.3 },
+
+  heroStatsRow: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 16, marginBottom: 16,
+    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, paddingVertical: 11, paddingHorizontal: 12,
+  },
   heroVal: { color: '#fff', fontSize: 14 },
   heroLbl: { color: 'rgba(255,255,255,0.72)', fontSize: 10, marginTop: 2 },
-  heroDiv: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.28)', marginHorizontal: 10 },
+  heroDiv: { width: 1, height: 28, backgroundColor: 'rgba(255,255,255,0.28)', marginHorizontal: 10 },
 
+  segRow: { flexDirection: 'row', gap: 4, marginBottom: 8 },
+  seg: { flex: 1, height: 6, borderRadius: 3 },
   heroTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.28)', borderRadius: 3, marginBottom: 8, overflow: 'hidden' },
   heroFill: { height: '100%', backgroundColor: '#fff', borderRadius: 3 },
-  heroMetaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  heroNext: { color: 'rgba(255,255,255,0.85)', fontSize: 12, flex: 1, marginRight: 8 },
+  heroMetaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  heroNext: { color: 'rgba(255,255,255,0.88)', fontSize: 11.5, flex: 1, marginRight: 8 },
   heroPct: { color: '#fff', fontSize: 12 },
 
   heroDatesRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
@@ -620,7 +688,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     backgroundColor: '#fff', paddingVertical: 12, borderRadius: 12,
   },
-  payBtnTxt: { fontSize: 13 },
+  payBtnTxt: { fontSize: 13.5 },
 
   // Sections
   section: {
@@ -633,80 +701,48 @@ const s = StyleSheet.create({
   sectionHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
   sectionIconWrap: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { flex: 1 },
-  sectionBody: { paddingHorizontal: 16, paddingVertical: 6 },
+  sectionBody: { paddingHorizontal: 16, paddingVertical: 4 },
   sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   countPill: { minWidth: 24, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7 },
   countPillTxt: { fontSize: 11 },
 
   row: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
-    paddingVertical: 10,
+    paddingVertical: 11,
   },
-  rowLabel: { flex: 0.42 },
-  rowValue: { flex: 0.58, textAlign: 'right' },
+  rowLabelWrap: { flex: 0.48, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  rowValue: { flex: 0.52, textAlign: 'right' },
 
   // Payment summary total box
-  summaryTotalBox: { borderRadius: 14, borderWidth: 1, padding: 14, marginTop: 6, marginBottom: 10 },
+  summaryTotalBox: { borderRadius: 14, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, marginTop: 6, marginBottom: 12 },
   summaryTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
-  summaryTotalLbl: { fontSize: 12.5 },
-  summaryTotalVal: { fontSize: 13.5 },
-  summaryTotalDivider: { height: 1, marginVertical: 8 },
-  summaryGrandLbl: { fontSize: 14 },
-  summaryGrandVal: { fontSize: 17 },
+  summaryTotalDivider: { height: 1, marginVertical: 6 },
+  summaryGrandLbl: { fontSize: 13.5 },
+  summaryGrandVal: { fontSize: 16.5 },
 
   emptyWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 24, gap: 8 },
   emptyTxt: { fontSize: 12 },
 
-  // Shared rail (used by both transaction + due-date timelines)
-  txnRail: { width: 34, alignItems: 'center' },
-  txnRailLine: { width: 2, flex: 1, marginTop: 2, borderRadius: 1 },
-
-  // Payment history — transaction cards
-  txnCard: { flexDirection: 'row' },
-  txnCardGap: { marginBottom: 4 },
+  // Compact list rows (payment history + due dates)
+  txnRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
   txnIconWrap: {
-    width: 30, height: 30, borderRadius: 15, borderWidth: 1,
+    width: 34, height: 34, borderRadius: 11,
     alignItems: 'center', justifyContent: 'center',
   },
-  txnBody: {
-    flex: 1, borderRadius: 14, borderWidth: 1, padding: 12, marginLeft: 6, marginBottom: 14,
-  },
-  txnTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  txnTitle: { marginBottom: 2 },
-  txnSub: { fontSize: 10.5 },
-  txnAmount: { marginBottom: 4 },
-  txnStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  statusDot: { width: 5, height: 5, borderRadius: 3 },
-  statusPillTxt: { fontSize: 9, letterSpacing: 0.4 },
-  txnViewBtn: {
-    width: 22, height: 22, borderRadius: 8, borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  txnDivider: { height: 1, marginVertical: 10 },
-  txnFooter: { flexDirection: 'row', flexWrap: 'wrap', gap: 18 },
-  txnFooterItem: {},
-  txnFooterLbl: { fontSize: 9.5, marginBottom: 2 },
-  txnFooterVal: { fontSize: 11.5 },
-  txnRef: { fontSize: 10, marginTop: 8 },
+  txnMid: { flex: 1, marginLeft: 11, marginRight: 8 },
+  txnTitle: { fontSize: 13 },
+  txnSub: { fontSize: 10.5, marginTop: 2 },
+  txnRight: { alignItems: 'flex-end', gap: 3 },
+  txnAmount: { fontSize: 13.5 },
+  txnWeight: { fontSize: 10.5 },
 
-  // Upcoming due dates — timeline
-  dueItem: { flexDirection: 'row' },
-  dueItemGap: { marginBottom: 4 },
   dueDot: {
-    width: 26, height: 26, borderRadius: 13, borderWidth: 1.5,
+    width: 34, height: 34, borderRadius: 17, borderWidth: 1.5,
     alignItems: 'center', justifyContent: 'center',
   },
-  dueDotTxt: { fontSize: 11 },
-  dueBody: {
-    flex: 1, borderRadius: 14, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 12,
-    marginLeft: 6, marginBottom: 12,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-  },
-  dueDate: { marginBottom: 2 },
-  dueDay: { fontSize: 11 },
-  nextTag: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 },
-  nextTagTxt: { fontSize: 9.5, letterSpacing: 0.5 },
+  dueDotTxt: { fontSize: 12 },
+  nextTag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  nextTagTxt: { fontSize: 8.5, letterSpacing: 0.5 },
 
   previewRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   previewTxt:  { fontSize: 13 },
@@ -714,7 +750,7 @@ const s = StyleSheet.create({
 
   expandBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    borderWidth: 1, borderRadius: 12, paddingVertical: 10, marginTop: 2, marginBottom: 10,
+    borderWidth: 1, borderRadius: 12, paddingVertical: 10, marginTop: 4, marginBottom: 12,
   },
   expandBtnTxt: { fontSize: 12.5 },
 });

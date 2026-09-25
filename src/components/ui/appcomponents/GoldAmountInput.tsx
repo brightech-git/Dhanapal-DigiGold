@@ -41,7 +41,7 @@ export default function GoldAmountInput({
       {/* Side-by-side amount / weight boxes */}
       <View style={s.dualRow}>
         {/* Amount box */}
-        <View style={[s.box, { borderColor: amountInput ? COLORS.brand : COLORS.borderSubtle, backgroundColor: COLORS.surfaceSunken }]}>
+        <View style={[s.box, { borderColor: belowMin ? COLORS.danger : amountInput ? COLORS.brand : COLORS.borderSubtle, backgroundColor: COLORS.surfaceSunken }]}>
           <Text style={[s.boxLabel, { color: COLORS.contentMuted, fontFamily: FONTS.family.medium }]}>Amount (₹)</Text>
           <TextInput
             value={amountInput}
@@ -74,23 +74,24 @@ export default function GoldAmountInput({
         </View>
       </View>
 
-      {/* Rate hint */}
-      <Text style={[s.hint, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-        {ratesLoading && goldRate === 0
-          ? 'Loading rate…'
-          : goldRate > 0
-          ? `₹${goldRate.toLocaleString('en-IN')} / g · 916 (22K)`
-          : '—'}
-      </Text>
-
-      {/* Min amount hint */}
-      {minAmount != null && (
-        <Text style={[s.hint, { color: belowMin ? COLORS.danger : COLORS.contentMuted, fontFamily: FONTS.family.regular, marginTop: 2 }]}>
-          {belowMin
-            ? `Minimum amount is ₹${minAmount.toLocaleString('en-IN')}`
-            : `Min. amount: ₹${minAmount.toLocaleString('en-IN')}`}
+      {/* Rate hint + min amount on one line */}
+      <View style={s.hintRow}>
+        <Text style={[s.hint, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]} numberOfLines={1}>
+          {ratesLoading && goldRate === 0
+            ? 'Loading rate…'
+            : goldRate > 0
+            ? `₹${goldRate.toLocaleString('en-IN')} / g · 916 (22K)`
+            : '—'}
         </Text>
-      )}
+        {minAmount != null && (
+          <Text
+            style={[s.hint, { color: belowMin ? COLORS.danger : COLORS.contentMuted, fontFamily: belowMin ? FONTS.family.semiBold : FONTS.family.regular }]}
+            numberOfLines={1}
+          >
+            Min ₹{minAmount.toLocaleString('en-IN')}{belowMin ? ' required' : ''}
+          </Text>
+        )}
+      </View>
 
       {/* Quick-select presets */}
       {presets && presets.length > 0 && onPresetPress && (
@@ -125,7 +126,8 @@ const s = StyleSheet.create({
   boxLabel:   { fontSize: 11, letterSpacing: 0.3, marginBottom: 6 },
   boxValue:   { fontSize: 20, padding: 0, includeFontPadding: false },
   swapBadge:  { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-  hint:       { fontSize: 11, marginTop: 6 },
+  hintRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 6 },
+  hint:       { fontSize: 11 },
   presetRow:  { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   preset:     { flexGrow: 1, flexBasis: '22%', alignItems: 'center', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 4 },
   presetText: { fontSize: 12 },

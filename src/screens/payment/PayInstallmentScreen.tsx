@@ -25,50 +25,66 @@ import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useRazorpay } from '../../api/hooks/Razorpay/useRazorpay';
 import { SchemeCollectInsert } from '../../types/Razorpay/Razorpay';
 import { PPData } from '../../types/Account/PhoneDetails';
-import { useToast } from '../../components/ui/Toast';
 import AppHeader from '../../components/ui/appcomponents/AppHeader';
 import GoldAmountInput from '../../components/ui/appcomponents/GoldAmountInput';
+import PaymentProcessingOverlay from '../../components/ui/PaymentProcessingOverlay';
 import { ratesService } from '../../api/services/ratesService';
+import { useSchemes } from '../../api/hooks/Schemes/useSchemes';
+import { useToast } from '../../components/ui/Toast';
+import {
+  getSchemeKind, isWeightKind, isFixedKind, KIND_META,
+  parseDate, formatDate, startOfDay, num, inr, grams,
+} from '../../utils/schemeKind';
 
 type RouteProps = RouteProp<RootStackParamList, 'PayInstallment'>;
 type NavProps   = NativeStackNavigationProp<RootStackParamList, 'PayInstallment'>;
 
-// ── Helpers ───────────────────────────────────────────────────────
-function formatDate(raw: string): string {
-  if (!raw) return '—';
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
 // ── Info Row ──────────────────────────────────────────────────────
-function InfoRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+function InfoRow({ label, value, valueColor, icon }: {
+  label: string; value: string; valueColor?: string; icon?: keyof typeof Ionicons.glyphMap;
+}) {
   const { COLORS, FONTS } = useTheme();
   return (
     <View style={s.infoRow}>
-      <Text style={[s.infoLabel, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>{label}</Text>
+      <View style={s.infoLabelWrap}>
+        {icon && <Ionicons name={icon} size={14} color={COLORS.contentMuted} />}
+        <Text style={[s.infoLabel, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>{label}</Text>
+      </View>
       <Text style={[s.infoValue, { color: valueColor ?? COLORS.contentPrimary, fontFamily: FONTS.family.semiBold }]}>{value}</Text>
     </View>
   );
 }
 
 // ── Success Modal ─────────────────────────────────────────────────
-function SuccessModal({ visible, amount, schemeName, paymentId, onDone }: {
+type SuccessRow = { label: string; value: string; icon: keyof typeof Ionicons.glyphMap; accent?: string };
+
+function SuccessModal({ visible, amount, schemeName, rows, onDone }: {
   visible:    boolean;
   amount:     number;
   schemeName: string;
-  paymentId:  string;
+  rows:       SuccessRow[];
   onDone:     () => void;
 }) {
   const { COLORS, FONTS } = useTheme();
   const scale   = useRef(new Animated.Value(0.7)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+  const tick    = useRef(new Animated.Value(0)).current;
+  const ring    = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
+      tick.setValue(0); ring.setValue(0);
       Animated.parallel([
         Animated.spring(scale,   { toValue: 1, useNativeDriver: true, damping: 14, stiffness: 160 }),
         Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+        Animated.sequence([
+          Animated.delay(120),
+          Animated.spring(tick, { toValue: 1, useNativeDriver: true, friction: 4, tension: 120 }),
+        ]),
+        Animated.loop(
+          Animated.timing(ring, { toValue: 1, duration: 1600, useNativeDriver: true }),
+          { iterations: 2 },
+        ),
       ]).start();
     } else {
       scale.setValue(0.7);
@@ -77,43 +93,62 @@ function SuccessModal({ visible, amount, schemeName, paymentId, onDone }: {
   }, [visible]);
 
   return (
-    <Modal visible={visible} transparent animationType="none">
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onDone}>
       <View style={s.modalOverlay}>
         <Animated.View style={[s.modalCard, { backgroundColor: COLORS.surfacePage, transform: [{ scale }], opacity }]}>
 
-          {/* Icon */}
-          <View style={[s.modalIconWrap, { backgroundColor: COLORS.success + '18' }]}>
-            <Ionicons name="checkmark-circle" size={72} color={COLORS.success} />
+          {/* Animated tick with expanding ring */}
+          <View style={s.successIconArea}>
+            <Animated.View
+              style={[
+                s.successRing,
+                {
+                  borderColor: COLORS.success,
+                  opacity: ring.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
+                  transform: [{ scale: ring.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.5] }) }],
+                },
+              ]}
+            />
+            <Animated.View style={[s.successIcon, { backgroundColor: COLORS.success, transform: [{ scale: tick }] }]}>
+              <Ionicons name="checkmark" size={44} color="#fff" />
+            </Animated.View>
           </View>
 
           <Text style={[s.modalTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
             Payment Successful!
           </Text>
-
-          <Text style={[s.modalDesc, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>
-            Your installment for{'\n'}
-            <Text style={{ color: COLORS.brand, fontFamily: FONTS.family.semiBold }}>{schemeName}</Text>
-            {'\n'}has been paid successfully.
+          <Text style={[s.successAmount, { color: COLORS.success, fontFamily: FONTS.family.bold }]}>
+            ₹{amount.toLocaleString('en-IN')}
+          </Text>
+          <Text style={[s.successScheme, { color: COLORS.contentSecondary, fontFamily: FONTS.family.medium }]} numberOfLines={1}>
+            paid to {schemeName}
           </Text>
 
-          {/* Amount chip */}
-          <View style={[s.amountChip, { backgroundColor: COLORS.success + '12', borderColor: COLORS.success + '30' }]}>
-            <Ionicons name="cash-outline" size={16} color={COLORS.success} />
-            <Text style={[s.amountChipText, { color: COLORS.success, fontFamily: FONTS.family.bold }]}>
-              ₹{amount.toLocaleString('en-IN')} paid
-            </Text>
+          {/* Receipt rows */}
+          <View style={[s.receiptBox, { backgroundColor: COLORS.surface, borderColor: COLORS.borderSubtle }]}>
+            {rows.map((r, i) => (
+              <View
+                key={r.label}
+                style={[s.receiptRow, i < rows.length - 1 && { borderBottomWidth: 1, borderBottomColor: COLORS.borderSubtle + '90' }]}
+              >
+                <View style={s.receiptLblWrap}>
+                  <Ionicons name={r.icon} size={14} color={COLORS.contentMuted} />
+                  <Text style={[s.receiptLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>{r.label}</Text>
+                </View>
+                <Text
+                  style={[s.receiptVal, { color: r.accent ?? COLORS.contentPrimary, fontFamily: FONTS.family.semiBold }]}
+                  numberOfLines={1}
+                  selectable
+                >
+                  {r.value}
+                </Text>
+              </View>
+            ))}
           </View>
 
-          {/* Payment ID */}
-          {paymentId ? (
-            <Text style={[s.paymentId, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-              Payment ID: {paymentId}
-            </Text>
-          ) : null}
-
-          <TouchableOpacity style={[s.modalBtn, { backgroundColor: COLORS.brand }]} onPress={onDone}>
+          <TouchableOpacity style={[s.modalBtn, { backgroundColor: COLORS.brand }]} onPress={onDone} activeOpacity={0.85}>
             <Text style={[s.modalBtnText, { color: COLORS.white, fontFamily: FONTS.family.bold }]}>
-              Back to My Schemes
+              Done
             </Text>
           </TouchableOpacity>
         </Animated.View>
@@ -165,34 +200,53 @@ export default function PayInstallmentScreen() {
   const { status, verifyData, error, pay, reset } = useRazorpay();
   const rzpWebRef = useRef<RazorpayWebCheckoutRef>(null);
   const toast = useToast();
+  // Scheme master list — source of COMMAMT (minimum amount), same as SchemeJoin
+  const { schemes: allSchemes, loading: schemesLoading } = useSchemes();
 
-  // ── Derive scheme info ────────────────────────────────────────
+  // ── Derive scheme info (type rules in utils/schemeKind) ─────────
   const scheme        = ppData.schemeSummary;
   const schemeName    = scheme?.schemeName ?? ppData.pName;
-  const isFixed       = scheme?.fixedIns === 'Y';
-  const paid          = parseInt(scheme?.schemaSummaryTransBalance?.insPaid ?? '0');
-  const total         = parseInt(scheme?.instalment ?? '0');
+  const kind          = getSchemeKind(ppData);
+  const kindMeta      = KIND_META[kind];
+  const isFixed       = isFixedKind(kind);
+  const isWeight      = isWeightKind(kind);
+  const paid          = parseInt(scheme?.schemaSummaryTransBalance?.insPaid ?? '0', 10) || 0;
+  const total         = parseInt(scheme?.instalment ?? '0', 10) || 0;
+  const remaining     = Math.max(total - paid, 0);
+  const allPaid       = isFixed && total > 0 && remaining === 0;
   const nextInstNum   = paid + 1;
-  const prevAmount    = ppData.paymentHistoryList?.[0]?.amount ?? null;
-  const defaultAmount = prevAmount ? Math.round(parseFloat(prevAmount)) : 0;
+  // Fixed instalment amount: the scheme's amount, falling back to the
+  // earliest recorded payment.
+  const firstPayment  = [...(ppData.paymentHistoryList ?? [])]
+    .sort((a, b) => parseInt(a.installment, 10) - parseInt(b.installment, 10))[0];
+  const defaultAmount = Math.round(num(ppData.amount) || num(firstPayment?.amount));
+
+  const totalWeight   = num(scheme?.totalWeight);
+  const invested      = num(ppData.totalAmount ?? scheme?.schemaSummaryTransBalance?.amtrecd);
+  const bonus         = num(ppData.bonusAmount);
+  const payCount      = ppData.paymentHistoryList?.length ?? paid;
+  const nextDue       = parseDate(ppData.nextDueDate);
+  const overdue       = !!nextDue && startOfDay(nextDue) < startOfDay(new Date());
+  const lastPayment   = [...(ppData.paymentHistoryList ?? [])]
+    .sort((a, b) => parseInt(b.installment, 10) - parseInt(a.installment, 10))[0];
 
   const [customAmount, setCustomAmount] = useState('');
   const [weightInput,  setWeightInput]  = useState('');
 
-  // DigiGold: WeightLedger=Y means amount↔weight conversion is shown
-  const isDigiGold = scheme?.weightLedger === 'Y' && !isFixed;
+  // DigiGold (Flexi Gold): amount↔weight dual input
+  const isDigiGold = kind === 'FLEXI_GOLD';
 
   const [goldRate,     setGoldRate]     = useState(0);
   const [ratesLoading, setRatesLoading] = useState(false);
 
   useEffect(() => {
-    if (!isDigiGold) return;
+    if (!isWeight) return;
     setRatesLoading(true);
     ratesService.getTodayRate()
       .then(r => { if (r?.GOLDRATE) setGoldRate(r.GOLDRATE); })
       .catch(() => {})
       .finally(() => setRatesLoading(false));
-  }, [isDigiGold]);
+  }, [isWeight]);
 
   // Keep weight in sync when amount changes
   const handleAmountChange = (v: string) => {
@@ -212,7 +266,30 @@ export default function PayInstallmentScreen() {
 
   const effectiveAmount = isFixed ? defaultAmount : (parseInt(customAmount) || 0);
 
-  const isReady = effectiveAmount > 0;
+  // DigiGold minimum amount per payment (commAmt); 0/absent = no minimum
+  // Taken from the member's scheme data if present, else from the scheme
+  // master list (COMMAMT) matched on schemeId.
+  const masterScheme = allSchemes.find(sc => String(sc.SchemeId) === String(scheme?.schemeId));
+  const commAmt      = num(scheme?.commAmt) || num(masterScheme?.COMMAMT);
+  const minAmount    = isDigiGold && commAmt > 0 ? commAmt : undefined;
+  const belowMin     = minAmount != null && effectiveAmount < minAmount;
+  const minAmountMsg = `Minimum amount is ₹${(minAmount ?? 0).toLocaleString('en-IN')}`;
+  const [amountError, setAmountError] = useState('');
+  useEffect(() => { if (!belowMin) setAmountError(''); }, [belowMin]);
+
+  // Button is pressable once an amount is entered, so a below-minimum
+  // amount gets explicit feedback (toast + inline error) like SchemeJoin.
+  const minLoading = isDigiGold && schemesLoading && !num(scheme?.commAmt);
+  const canPress   = effectiveAmount > 0 && !allPaid && !minLoading;
+  const isReady    = canPress && !belowMin;
+
+  // Estimated gold credited for this payment (weight schemes)
+  const estWeight = isWeight
+    ? (isDigiGold && parseFloat(weightInput) > 0
+        ? parseFloat(weightInput)
+        : goldRate > 0 ? effectiveAmount / goldRate : 0)
+    : 0;
+  const payNoun = isFixed ? 'Instalment' : 'Payment';
 
   // ── Status-based modal visibility ─────────────────────────────
   const showSuccess  = status === 'success';
@@ -242,6 +319,11 @@ export default function PayInstallmentScreen() {
   };
 
   const handlePay = () => {
+    if (belowMin) {
+      setAmountError(minAmountMsg);
+      toast.error('Amount too low', { message: minAmountMsg, position: 'top', duration: 3000 });
+      return;
+    }
     if (!isReady) return;
     pay(
       {
@@ -270,19 +352,28 @@ export default function PayInstallmentScreen() {
     );
   };
 
-  // On payment success: redirect straight to Home and show an auto-dismissing
-  // popup there (no button needed).
-  useEffect(() => {
-    if (status !== 'success') return;
-    toast.success('Payment Successful 🎉', {
-      message: `Instalment #${nextInstNum} for ${schemeName} is paid.`,
-      position: 'top',
-      duration: 4000,
-      closable: false,
-    });
-    reset();
-    navigation.navigate('Main');
-  }, [status]);
+  // On payment success the SuccessModal is shown (showSuccess); "Done"
+  // takes the member back to Home.
+  const successRows = (): SuccessRow[] => {
+    const now = new Date();
+    const paidWeight = estWeight;
+    return [
+      { label: 'Status', value: 'Success', icon: 'checkmark-circle-outline', accent: COLORS.success },
+      { label: 'Reg No', value: `${ppData.groupCode ? `${ppData.groupCode} - ` : ''}${ppData.regNo}`, icon: 'id-card-outline' },
+      { label: payNoun, value: `#${nextInstNum}${isFixed && total > 0 ? ` of ${total}` : ''}`, icon: 'layers-outline' },
+      ...(paidWeight > 0
+        ? [{ label: 'Gold Weight', value: `${paidWeight.toFixed(3)} g`, icon: 'diamond-outline' as const, accent: COLORS.accentDeep }]
+        : []),
+      {
+        label: 'Date',
+        value: `${now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}, ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`,
+        icon: 'calendar-outline',
+      },
+      ...(verifyData?.paymentId
+        ? [{ label: 'Payment ID', value: verifyData.paymentId, icon: 'receipt-outline' as const }]
+        : []),
+    ];
+  };
 
   const handleSuccessDone = () => {
     reset();
@@ -300,7 +391,7 @@ export default function PayInstallmentScreen() {
     <SafeAreaView style={[s.container, { backgroundColor: COLORS.surfacePage }]} edges={['bottom']}>
 
       {/* Header */}
-      <AppHeader title="Pay Installment" subtitle={schemeName} showBack  />
+      <AppHeader title={isDigiGold ? 'Buy Gold' : 'Pay Instalment'} subtitle={schemeName} showBack />
 
       <ScrollView
         style={{ flex: 1 }}
@@ -311,35 +402,92 @@ export default function PayInstallmentScreen() {
 
         {/* ── Scheme Summary Card ── */}
         <View style={[s.card, { backgroundColor: COLORS.white, borderColor: COLORS.borderSubtle, ...SHADOWS.sm }]}>
-          <View style={[s.cardIconWrap, { backgroundColor: COLORS.brand + '12' }]}>
-            <Ionicons name="diamond-outline" size={22} color={COLORS.brand} />
+          <View style={s.cardHeadRow}>
+            <View style={[s.cardIconWrap, { backgroundColor: COLORS.brand + '12' }]}>
+              <Ionicons name={isWeight ? 'diamond-outline' : 'wallet-outline'} size={22} color={COLORS.brand} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.cardTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]} numberOfLines={1}>
+                {schemeName}
+              </Text>
+              <Text style={[s.cardSub, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]} numberOfLines={1}>
+                {ppData.groupCode ? `${ppData.groupCode} - ` : 'Reg No '}{ppData.regNo}
+              </Text>
+            </View>
           </View>
-          <Text style={[s.cardTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
-            {schemeName}
-          </Text>
-          <Text style={[s.cardSub, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>
-            Scheme Code: {scheme?.schemeSName ?? ppData.groupCode}  ·  Reg No: {ppData.regNo}
-          </Text>
+          <View style={[s.kindChip, { backgroundColor: COLORS.brand + '10', borderColor: COLORS.brand + '30' }]}>
+            <Ionicons name={kindMeta.icon} size={12} color={COLORS.brand} />
+            <Text style={[s.kindChipTxt, { color: COLORS.brand, fontFamily: FONTS.family.semiBold }]}>
+              {kindMeta.label}{isFixed && total > 0 ? `  •  ${total} Instalments` : '  •  Pay any amount, anytime'}
+            </Text>
+          </View>
+
+          {isWeight && (
+            <View style={[s.goldBox, { backgroundColor: COLORS.accentDeep + '0D', borderColor: COLORS.accentDeep + '30' }]}>
+              <View>
+                <Text style={[s.goldLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.medium }]}>Gold Accumulated</Text>
+                <Text style={[s.goldVal, { color: COLORS.accentDeep, fontFamily: FONTS.family.bold }]}>{grams(totalWeight)}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[s.goldLbl, { color: COLORS.contentMuted, fontFamily: FONTS.family.medium }]}>Invested</Text>
+                <Text style={[s.goldSide, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>{inr(invested)}</Text>
+              </View>
+            </View>
+          )}
 
           <View style={[s.divider, { backgroundColor: COLORS.borderSubtle }]} />
 
-          <InfoRow label="Instalments Paid"   value={`${paid} / ${total}`} />
-          <InfoRow label="Next Instalment No." value={`# ${nextInstNum}`} valueColor={COLORS.brand} />
-          <InfoRow label="Maturity Date"       value={formatDate(ppData.maturityDate)} />
-          <InfoRow label="Next Due Date"       value={formatDate(ppData.nextDueDate)} valueColor={COLORS.warning} />
-          <InfoRow label="Total Invested"      value={`₹${(ppData.totalAmount ?? 0).toLocaleString('en-IN')}`} />
-          <InfoRow label="Total with Bonus"    value={`₹${(ppData.totalAmountWithBonus ?? 0).toLocaleString('en-IN')}`} valueColor={COLORS.success} />
+          {isFixed ? (
+            <>
+              <InfoRow icon="checkmark-circle-outline" label="Instalments Paid" value={`${paid} / ${total}`} />
+              {!allPaid && (
+                <InfoRow icon="layers-outline" label="Next Instalment" value={`#${nextInstNum}`} valueColor={COLORS.brand} />
+              )}
+              {!allPaid && nextDue && (
+                <InfoRow
+                  icon={overdue ? 'alert-circle-outline' : 'calendar-outline'}
+                  label={overdue ? 'Overdue Since' : 'Next Due Date'}
+                  value={formatDate(ppData.nextDueDate)}
+                  valueColor={overdue ? (COLORS.danger ?? COLORS.error) : COLORS.warning}
+                />
+              )}
+              {!isWeight && <InfoRow icon="cash-outline" label="Total Paid" value={inr(invested)} />}
+              {!isWeight && defaultAmount > 0 && !allPaid && (
+                <InfoRow icon="hourglass-outline" label="Balance Payable" value={inr(defaultAmount * remaining)} />
+              )}
+            </>
+          ) : (
+            <>
+              <InfoRow icon="receipt-outline" label="Payments Made" value={String(payCount)} />
+              {!isWeight && <InfoRow icon="cash-outline" label="Total Paid" value={inr(invested)} />}
+              {lastPayment && (
+                <InfoRow
+                  icon="time-outline"
+                  label="Last Payment"
+                  value={`${inr(lastPayment.amount)}  ·  ${formatDate(lastPayment.updateTime)}`}
+                />
+              )}
+            </>
+          )}
+          {bonus > 0 && <InfoRow icon="gift-outline" label="Bonus" value={inr(bonus)} valueColor={COLORS.success} />}
+          <InfoRow icon="flag-outline" label="Maturity Date" value={formatDate(ppData.maturityDate)} />
         </View>
 
         {/* ── Amount Section ── */}
         <View style={[s.card, { backgroundColor: COLORS.white, borderColor: COLORS.borderSubtle, ...SHADOWS.sm }]}>
           <Text style={[s.sectionTitle, { color: COLORS.contentPrimary, fontFamily: FONTS.family.bold }]}>
-            {isFixed ? 'Installment Amount' : 'Enter Installment Amount'}
+            {isFixed ? 'Instalment Amount' : isDigiGold ? 'How much gold would you like?' : 'Enter Amount'}
           </Text>
           <Text style={[s.sectionSub, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>
-            {isFixed
-              ? 'This is a fixed instalment scheme. The amount is set from your first payment.'
-              : 'This is a flexible instalment scheme. Enter any amount for this instalment.'}
+            {allPaid
+              ? 'All instalments for this scheme are paid. Nothing is due.'
+              : kind === 'FIXED_GOLD'
+                ? "Fixed monthly instalment. Gold is credited to your account at today's rate."
+                : isFixed
+                  ? 'Fixed monthly instalment for this scheme.'
+                  : isDigiGold
+                    ? "Enter an amount or a weight — gold is credited at today's rate. You can buy any number of times."
+                    : 'Flexible scheme — enter any amount for this payment.'}
           </Text>
 
           {isFixed ? (
@@ -351,12 +499,22 @@ export default function PayInstallmentScreen() {
                   ₹{effectiveAmount.toLocaleString('en-IN')}
                 </Text>
                 <Text style={[s.fixedAmountLabel, { color: COLORS.contentMuted, fontFamily: FONTS.family.regular }]}>
-                  per instalment
+                  {allPaid ? 'per instalment  ·  fully paid' : `for instalment #${nextInstNum}${total > 0 ? ` of ${total}` : ''}`}
                 </Text>
+                {kind === 'FIXED_GOLD' && !allPaid && (
+                  <Text style={[s.fixedAmountLabel, { color: COLORS.accentDeep, fontFamily: FONTS.family.semiBold }]}>
+                    {ratesLoading && goldRate === 0
+                      ? 'Fetching gold rate…'
+                      : estWeight > 0
+                        ? `≈ ${grams(estWeight)} at ₹${goldRate.toLocaleString('en-IN')}/g`
+                        : ''}
+                  </Text>
+                )}
               </View>
             </View>
           ) : isDigiGold ? (
             /* DigiGold: dual amount ↔ weight input */
+            <>
             <GoldAmountInput
               amountInput={customAmount}
               weightInput={weightInput}
@@ -364,9 +522,17 @@ export default function PayInstallmentScreen() {
               onWeightChange={handleWeightChange}
               goldRate={goldRate}
               ratesLoading={ratesLoading}
+              minAmount={minAmount}
               presets={[500, 1000, 2000, 5000]}
               onPresetPress={(v) => handleAmountChange(String(v))}
             />
+            {amountError ? (
+              <View style={s.amountErrRow}>
+                <Ionicons name="alert-circle-outline" size={12} color="#E53935" />
+                <Text style={[s.amountErrTxt, { fontFamily: FONTS.family.regular }]}>{amountError}</Text>
+              </View>
+            ) : null}
+            </>
           ) : (
             /* Plain flexible amount input */
             <View>
@@ -402,9 +568,17 @@ export default function PayInstallmentScreen() {
               </Text>
             </View>
             <View style={s.summaryRow}>
-              <Text style={[s.summaryLabel, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>Instalment No.</Text>
-              <Text style={[s.summaryValue, { color: COLORS.contentPrimary, fontFamily: FONTS.family.semiBold }]}>#{nextInstNum}</Text>
+              <Text style={[s.summaryLabel, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>{payNoun} No.</Text>
+              <Text style={[s.summaryValue, { color: COLORS.contentPrimary, fontFamily: FONTS.family.semiBold }]}>
+                #{nextInstNum}{isFixed && total > 0 ? ` of ${total}` : ''}
+              </Text>
             </View>
+            {isWeight && estWeight > 0 && (
+              <View style={s.summaryRow}>
+                <Text style={[s.summaryLabel, { color: COLORS.contentSecondary, fontFamily: FONTS.family.regular }]}>Gold Credited (approx.)</Text>
+                <Text style={[s.summaryValue, { color: COLORS.accentDeep, fontFamily: FONTS.family.semiBold }]}>{grams(estWeight)}</Text>
+              </View>
+            )}
             <View style={[s.divider, { backgroundColor: COLORS.brand + '20', marginVertical: 10 }]} />
             <View style={s.summaryRow}>
               <Text style={[s.summaryLabel, { color: COLORS.brand, fontFamily: FONTS.family.bold, fontSize: 15 }]}>Total Payable</Text>
@@ -424,12 +598,12 @@ export default function PayInstallmentScreen() {
           style={[
             s.payBtn,
             {
-              backgroundColor: isReady && !isProcessing ? COLORS.brand : COLORS.borderSubtle,
-              ...(isReady && !isProcessing ? SHADOWS.md : {}),
+              backgroundColor: canPress && !isProcessing ? COLORS.brand : COLORS.borderSubtle,
+              ...(canPress && !isProcessing ? SHADOWS.md : {}),
             },
           ]}
           onPress={handlePay}
-          disabled={!isReady || isProcessing}
+          disabled={!canPress || isProcessing}
           activeOpacity={0.85}
         >
           {isProcessing ? (
@@ -446,10 +620,12 @@ export default function PayInstallmentScreen() {
               <Ionicons
                 name="card-outline"
                 size={20}
-                color={isReady ? COLORS.white : COLORS.contentMuted}
+                color={canPress ? COLORS.white : COLORS.contentMuted}
               />
-              <Text style={[s.payBtnText, { color: isReady ? COLORS.white : COLORS.contentMuted, fontFamily: FONTS.family.bold }]}>
-                Pay ₹{effectiveAmount > 0 ? effectiveAmount.toLocaleString('en-IN') : '—'} via Razorpay
+              <Text style={[s.payBtnText, { color: canPress ? COLORS.white : COLORS.contentMuted, fontFamily: FONTS.family.bold }]}>
+                {allPaid
+                  ? 'All Instalments Paid'
+                  : `${isDigiGold ? 'Buy Gold' : 'Pay'} ₹${effectiveAmount > 0 ? effectiveAmount.toLocaleString('en-IN') : '—'}`}
               </Text>
             </>
           )}
@@ -460,11 +636,23 @@ export default function PayInstallmentScreen() {
       <RazorpayWebCheckout ref={rzpWebRef} />
 
       {/* ── Modals ── */}
+      <SuccessModal
+        visible={showSuccess}
+        amount={effectiveAmount}
+        schemeName={schemeName}
+        rows={showSuccess ? successRows() : []}
+        onDone={handleSuccessDone}
+      />
       <FailureModal
         visible={showFailed}
         message={error ?? ''}
         onRetry={() => { reset(); handlePay(); }}
         onCancel={handleFailedCancel}
+      />
+      {/* Shown while the payment is verified server-side */}
+      <PaymentProcessingOverlay
+        visible={status === 'verifying'}
+        steps={['Payment received', 'Verifying payment', `Updating instalment #${nextInstNum}`]}
       />
     </SafeAreaView>
   );
@@ -481,12 +669,22 @@ const s = StyleSheet.create({
   scrollContent:   { padding: 16, gap: 16 },
 
   card:            { borderRadius: 16, borderWidth: 1, padding: 16 },
-  cardIconWrap:    { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  cardTitle:       { fontSize: 16, marginBottom: 4 },
-  cardSub:         { fontSize: 12, opacity: 0.7, marginBottom: 14 },
+  cardHeadRow:     { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  cardIconWrap:    { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  cardTitle:       { fontSize: 16, marginBottom: 2 },
+  cardSub:         { fontSize: 12, opacity: 0.7 },
+  kindChip:        { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1 },
+  kindChipTxt:     { fontSize: 11 },
+  goldBox:         { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 14, padding: 14, borderRadius: 14, borderWidth: 1 },
+  goldLbl:         { fontSize: 11, letterSpacing: 0.3 },
+  goldVal:         { fontSize: 24, marginTop: 2 },
+  goldSide:        { fontSize: 15, marginTop: 2 },
 
   divider:         { height: 1, marginVertical: 12 },
   infoRow:         { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+  amountErrRow:    { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  amountErrTxt:    { fontSize: 11, color: '#E53935' },
+  infoLabelWrap:   { flexDirection: 'row', alignItems: 'center', gap: 7 },
   infoLabel:       { fontSize: 13 },
   infoValue:       { fontSize: 13 },
 
@@ -519,6 +717,16 @@ const s = StyleSheet.create({
   amountChip:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, borderWidth: 1, marginBottom: 12 },
   amountChipText:  { fontSize: 16 },
   paymentId:       { fontSize: 11, opacity: 0.6, marginBottom: 24, textAlign: 'center' },
+  successIconArea: { width: 104, height: 104, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  successRing:     { position: 'absolute', width: 104, height: 104, borderRadius: 52, borderWidth: 3 },
+  successIcon:     { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
+  successAmount:   { fontSize: 30, letterSpacing: -0.5 },
+  successScheme:   { fontSize: 13, marginTop: 2, marginBottom: 18 },
+  receiptBox:      { width: '100%', borderRadius: 14, borderWidth: 1, paddingHorizontal: 14, marginBottom: 20 },
+  receiptRow:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, gap: 12 },
+  receiptLblWrap:  { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  receiptLbl:      { fontSize: 12.5 },
+  receiptVal:      { fontSize: 12.5, flexShrink: 1, textAlign: 'right' },
   modalBtn:        { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center' },
   modalBtnText:    { fontSize: 16 },
 });

@@ -34,6 +34,7 @@ export interface SchemeSummary {
   weightLedger: string;
   totalWeight: string;
   lastWeight: string;
+  commAmt?: number;
 }
 
 export interface SchemeClosedSummary {
@@ -61,6 +62,9 @@ export interface PaymentHistory {
   chqBranch: string;
   chqBank: string;
   chqRtnReason: string | null;
+  rate?: string;
+  bonusAmount?: string;
+  bonusWeight?: string;
 }
 
 export interface PPData {

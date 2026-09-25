@@ -141,7 +141,7 @@ export default function ProfileScreen() {
       <AppHeader
           title="My Profile"
           showBack
-          onBackPress={() => navigation.navigate('Home' as any)}
+          onBackPress={() => (navigation as any).navigate('Main', { screen: 'Home' })}
         />
       {/* ── HERO BANNER ─────────────────────────────────────────── */}
       <LinearGradient

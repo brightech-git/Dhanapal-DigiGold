@@ -18,6 +18,7 @@ export interface ApiScheme {
   GroupCodeForAllAmount: YN;
   GROUPCODE: string;
   RegNo: number;
+  COMMAMT: number;
   MetalType: MetalType | string;
 }
 

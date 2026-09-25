@@ -37,6 +37,7 @@ import { useToast } from '../../components/ui/Toast';
 import { useAppSelector } from '../../store/hooks';
 import AppHeader from '../../components/ui/appcomponents/AppHeader';
 import GoldAmountInput from '../../components/ui/appcomponents/GoldAmountInput';
+import PaymentProcessingOverlay from '../../components/ui/PaymentProcessingOverlay';
 import { ratesService } from '../../api/services/ratesService';
 
 type RouteProps = RouteProp<RootStackParamList, 'SchemeJoin'>;
@@ -617,6 +618,8 @@ const jm = StyleSheet.create({
 });
 
 // ── Main Screen ──────────────────────────────────────────────────
+// Last-entered join details, kept per logged-in user so the next join is
+// pre-filled (still editable). Not cleared on a successful join.
 const DRAFT_KEY = 'SCHEME_JOIN_DRAFT';
 
 export default function SchemeJoinScreen() {
@@ -636,6 +639,9 @@ export default function SchemeJoinScreen() {
   const rzpWebRef = useRef<RazorpayWebCheckoutRef>(null);
   const toast = useToast();
   const user = useAppSelector(s => s.auth.user);
+  // Mobile is locked to the logged-in account's number when we have one.
+  const loggedInMobile = (user?.contactNumber ?? '').trim();
+  const draftKey = `${DRAFT_KEY}_${loggedInMobile || 'guest'}`;
 
   // API: fetch groups for this scheme (gives AMOUNT, GROUPCODE, CURRENTREGNO)
   const { groups, loading: groupsLoading } = useMemberScheme(scheme.SchemeId);
@@ -643,6 +649,9 @@ export default function SchemeJoinScreen() {
   const mColor  = METAL_COLOR[scheme.MetalType] ?? COLORS.brand;
   const mLabel  = METAL_LABEL[scheme.MetalType] ?? scheme.MetalType;
   const isFixed = scheme.FixedIns === 'Y';
+
+  // Debug: log full scheme to verify COMMAMT is arriving
+  useEffect(() => { console.log('[SchemeJoin] full scheme:', JSON.stringify(scheme)); }, []);
 
   // Selected group from dropdown (FixedIns=Y)
   const [selectedGroup, setSelectedGroup] = useState<MemberSchemeGroup | null>(null);
@@ -687,6 +696,11 @@ export default function SchemeJoinScreen() {
     ? (selectedGroup?.AMOUNT ?? 0)
     : (parseInt(customAmount) || 0);
 
+  // DigiGold minimum amount per payment (COMMAMT); 0/absent = no minimum
+  const minAmount = isDigiGold && scheme.COMMAMT > 0 ? scheme.COMMAMT : undefined;
+  const belowMin  = minAmount != null && effectiveAmount < minAmount;
+  const minAmountMsg = `Minimum amount is ₹${(minAmount ?? 0).toLocaleString('en-IN')}`;
+
   // Customer details
   const [name,    setName]    = useState('');
   const [mobile,  setMobile]  = useState('');
@@ -728,7 +742,7 @@ export default function SchemeJoinScreen() {
   useEffect(() => {
     if (!user) return;
     if (user.username     && !name)   setName(user.username);
-    if (user.contactNumber && !mobile) setMobile(user.contactNumber);
+    if (user.contactNumber) setMobile(user.contactNumber.trim());
     if (user.email        && !email)  setEmail(user.email);
     if (user.gender       && !gender) setGender(user.gender);
     if (user.address1     && !doorStreet) setDoorStreet(user.address1);
@@ -748,14 +762,18 @@ export default function SchemeJoinScreen() {
     }
   }, [user]);
 
-  // ── AsyncStorage: load draft on mount ──────────────────────────
+  // ── AsyncStorage: load last-entered details for this user ──────
+  // Saving is held off until this finishes, otherwise the initial empty
+  // form would overwrite the stored details before they're read.
+  const [draftLoaded, setDraftLoaded] = useState(false);
   useEffect(() => {
-    AsyncStorage.getItem(DRAFT_KEY).then(raw => {
+    setDraftLoaded(false);
+    AsyncStorage.getItem(draftKey).then(raw => {
       if (!raw) return;
       try {
         const d = JSON.parse(raw);
         if (d.name)       setName(d.name);
-        if (d.mobile)     setMobile(d.mobile);
+        if (d.mobile && !loggedInMobile) setMobile(d.mobile);
         if (d.email)      setEmail(d.email);
         if (d.aadhaar)    setAadhaar(d.aadhaar);
         if (d.pan)        setPan(d.pan);
@@ -774,8 +792,8 @@ export default function SchemeJoinScreen() {
         if (d.dobYear)    setDobYear(d.dobYear);
         if (d.dobSet)     setDobSet(d.dobSet);
       } catch { /* ignore corrupt data */ }
-    });
-  }, []);
+    }).catch(() => {}).finally(() => setDraftLoaded(true));
+  }, [draftKey]);
 
   // ── Pincode → auto-fill area / city / district / state ─────────
   // NOTE: this previously called `.../pincode/\${pin}` — the escaped `$`
@@ -822,14 +840,15 @@ export default function SchemeJoinScreen() {
     }
   };
 
-  // ── AsyncStorage: save draft whenever any field changes ─────────
+  // ── AsyncStorage: save details whenever any field changes ──────
   useEffect(() => {
+    if (!draftLoaded) return;
     const draft = { name, mobile, email, aadhaar, pan,
                     doorStreet, pincode, area, city, district, stateVal,
                     nominee, nomRel, nomMobile, gender,
                     dobDay, dobMonth, dobYear, dobSet };
-    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  }, [name, mobile, email, aadhaar, pan,
+    AsyncStorage.setItem(draftKey, JSON.stringify(draft)).catch(() => {});
+  }, [draftLoaded, draftKey, name, mobile, email, aadhaar, pan,
       doorStreet, pincode, area, city, district, stateVal,
       nominee, nomRel, nomMobile, gender,
       dobDay, dobMonth, dobYear, dobSet]);
@@ -892,6 +911,7 @@ export default function SchemeJoinScreen() {
     area.trim().length > 0 &&        // pincode must have actually resolved via the postal API
     !fieldErrors.pincode &&
     effectiveAmount > 0 &&
+    !belowMin &&
     (!isFixed || selectedGroup !== null);
 
   const isProcessing = ['creating_order', 'checkout_open', 'verifying'].includes(status);
@@ -1014,6 +1034,7 @@ export default function SchemeJoinScreen() {
     const fe: Record<string, string> = {};
     if (isFixed && !selectedGroup) fe.group  = 'Select a group';
     if (effectiveAmount <= 0)      fe.amount = 'Select or enter amount';
+    else if (belowMin)             fe.amount = minAmountMsg;
 
     if (Object.keys(fe).length > 0) {
       setFieldErrors(fe);
@@ -1050,6 +1071,7 @@ export default function SchemeJoinScreen() {
       else                            fe.pincode  = 'Pincode could not be verified — re-enter it';
     }
     if (effectiveAmount <= 0)         fe.amount   = 'Select or enter amount';
+    else if (belowMin)                fe.amount   = minAmountMsg;
     if (isFixed && !selectedGroup)    fe.group    = 'Select a group';
 
     setFieldErrors(fe);
@@ -1120,12 +1142,6 @@ export default function SchemeJoinScreen() {
       },
     );
   };
-
-  // On payment success: clear draft — JoinSuccessModal handles navigation.
-  useEffect(() => {
-    if (status !== 'success') return;
-    AsyncStorage.removeItem(DRAFT_KEY);
-  }, [status]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: COLORS.surfacePage }]} edges={['bottom']}>
@@ -1236,6 +1252,7 @@ export default function SchemeJoinScreen() {
                   onWeightChange={(v) => { handleWeightChange(v); clearErr('amount'); }}
                   goldRate={goldRate}
                   ratesLoading={ratesLoading}
+                  minAmount={minAmount}
                   presets={[500, 1000, 2000, 5000]}
                   onPresetPress={(v) => { handleAmountChange(String(v)); clearErr('amount'); }}
                 />
@@ -1292,6 +1309,8 @@ export default function SchemeJoinScreen() {
               onChangeText={(v) => { setMobile(v.replace(/[^0-9]/g,'')); clearErr('mobile'); }}
               keyboardType="phone-pad"
               maxLength={10}
+              editable={!loggedInMobile}
+              rightIcon={loggedInMobile ? 'lock-closed-outline' : undefined}
               error={fieldErrors.mobile}
               indicator="required"
               colors={COLORS} fonts={FONTS}
@@ -1672,6 +1691,12 @@ export default function SchemeJoinScreen() {
           reset();
           navigation.navigate('Main');
         }}
+      />
+      {/* Shown between Razorpay checkout closing and the success modal */}
+      <PaymentProcessingOverlay
+        visible={status === 'verifying' && !showJoinResult}
+        title="Setting up your scheme"
+        steps={['Payment received', 'Verifying payment', 'Creating your membership']}
       />
     </SafeAreaView>
   );

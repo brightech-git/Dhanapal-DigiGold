@@ -79,6 +79,7 @@ function buildReceiptHtml(data: ReceiptData, company: Company | undefined, logoB
   const schemeName = ppData.schemeSummary?.schemeName?.trim() || 'Scheme';
   const groupRegNo = `${ppData.groupCode ?? 'N/A'}-${ppData.regNo ?? 'N/A'}`;
   const weight = parseFloat(String(payment.weight ?? '0')) || 0;
+  const rate = parseFloat(String(payment.rate ?? '0')) || 0;
 
   const bank = (payment.chqBank ?? '').trim();
   const hasPaymentMode = (bank && bank !== 'N/A') || (payment.chq_CardNo && payment.chq_CardNo !== 'N/A');
@@ -194,18 +195,18 @@ function buildReceiptHtml(data: ReceiptData, company: Company | undefined, logoB
       <thead>
         <tr>
           <th style="width:12%;">S.No</th>
-          <th style="width:32%;">Group Code - Reg No</th>
           <th style="width:20%;">Installment</th>
-          ${weight > 0 ? `<th style="width:16%;">Weight (g)</th>` : ''}
+          ${weight > 0 ? `<th style="width:14%;">Weight (g)</th>` : ''}
+          ${weight > 0 && rate > 0 ? `<th style="width:16%;">Rate (₹/g)</th>` : ''}
           <th>Amount</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td>1</td>
-          <td>${groupRegNo}</td>
           <td>#${payment.installment}</td>
           ${weight > 0 ? `<td>${weight.toFixed(3)}</td>` : ''}
+          ${weight > 0 && rate > 0 ? `<td>${rate.toLocaleString('en-IN')}</td>` : ''}
           <td>${formatCurrency(payment.amount)}</td>
         </tr>
       </tbody>

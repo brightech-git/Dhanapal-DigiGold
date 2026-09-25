@@ -119,7 +119,7 @@ export default function SchemeScreen() {
          <AppHeader
         title="Schemes"
         showBack
-        onBackPress={() => (navigation as any).navigate('Home')}
+        onBackPress={() => (navigation as any).navigate('Main', { screen: 'Home' })}
       />
 
       {/* Header */}

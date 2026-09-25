@@ -126,7 +126,7 @@ export default function ContactScreen() {
              <AppHeader
             title="Contact"
             showBack
-            onBackPress={() => navigation.navigate('Home')}
+            onBackPress={() => (navigation as any).navigate('Main', { screen: 'Home' })}
             
           />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
