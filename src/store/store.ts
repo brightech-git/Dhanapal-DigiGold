@@ -6,21 +6,28 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import authReducer from './authSlice';
 import mpinReducer from './mpinSlice';
 
-const persistConfig = {
-  key: 'root',
+// Persist only real session data — never `loading` / `error`. A persisted
+// `loading: true` (app killed mid-request) used to freeze the MPIN/Login
+// screens until the app data was cleared.
+const authPersistConfig = {
+  key: 'auth',
   storage: AsyncStorage,
-  whitelist: ['auth', 'mpin'],
+  whitelist: ['user', 'token', 'isLoggedIn'],
+};
+
+const mpinPersistConfig = {
+  key: 'mpin',
+  storage: AsyncStorage,
+  whitelist: ['mpinSet'],
 };
 
 const rootReducer = combineReducers({
-  auth: authReducer,
-  mpin: mpinReducer,
+  auth: persistReducer(authPersistConfig, authReducer),
+  mpin: persistReducer(mpinPersistConfig, mpinReducer),
 });
 
-const persistedReducer = persistReducer(persistConfig, rootReducer);
-
 export const store = configureStore({
-  reducer: persistedReducer,
+  reducer: rootReducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {

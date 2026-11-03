@@ -24,6 +24,9 @@ const KEYS = {
   DEVICE_ID:      '@device_id',
 } as const;
 
+// Old redux-persist blob (whole auth+mpin slices incl. `loading`) — replaced by per-slice keys.
+const LEGACY_PERSIST_ROOT = 'persist:root';
+
 // ── Save after login / register / verifyOtp ───────────────────────
 const saveUserSession = async (user: UserData): Promise<void> => {
   const pairs: [string, string][] = [
@@ -92,7 +95,11 @@ const clearSession = () =>
     KEYS.USED_REFERRAL,
     KEYS.PICTURE,
     KEYS.SOCIAL_MEDIA,
-    // MPIN_SET intentionally kept — MPIN persists across logout/login
+    // MPIN_SET cleared too — login re-reads it from the server (user.mpinSet),
+    // so a different account on this device never inherits the old user's flag.
+    KEYS.MPIN_SET,
+    LEGACY_PERSIST_ROOT,
+    // ONBOARDED / DEVICE_ID / FCM_TOKEN kept — they belong to the device, not the user.
   ]);
 
 // ── Clear everything including onboarding ────────────────────────

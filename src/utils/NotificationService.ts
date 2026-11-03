@@ -160,7 +160,8 @@ export async function deactivateDeviceToken() {
   try {
     const deviceId = await AsyncStorageHelper.getDeviceId();
     if (!deviceId) return;
-    await axiosInstance.post(DEVICE.LOGOUT, { deviceId });
+    // Short timeout so logout never hangs offline; never re-trigger the session-expired flow.
+    await axiosInstance.post(DEVICE.LOGOUT, { deviceId }, { timeout: 5000, skipSessionExpiry: true });
   } catch (err) {
   }
 }

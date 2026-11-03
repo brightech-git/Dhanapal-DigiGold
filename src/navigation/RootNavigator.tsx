@@ -13,6 +13,8 @@ import {
   handleBackgroundOpenedApp,
 } from '../utils/NotificationHandler';
 import { navigationRef } from './navigationRef';
+import { startSessionWatcher, ensureValidSession } from '../utils/sessionManager';
+import { withTimeout } from '../utils/withTimeout';
 import { ApiScheme } from '../types/Scheme/Scheme';
 import { PPData, PaymentHistory } from '../types/Account/PhoneDetails';
 import { useAppVersion } from '../utils/useAppVersion';
@@ -61,6 +63,18 @@ type InitialRoute = 'Onboarding' | 'Register' | 'Login' | 'CreateMpin' | 'MpinLo
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
+async function resolveInitialRoute(): Promise<{ route: InitialRoute; hasSession: boolean }> {
+  const onboarded = await AsyncStorageHelper.isOnboarded();
+  // Expired token → wiped here, so the user lands on Login with clean storage
+  const hasSession = await ensureValidSession();
+  const mpinSet    = await AsyncStorageHelper.isMpinSet();
+
+  if (!onboarded)  return { route: 'Onboarding', hasSession };
+  if (!hasSession) return { route: 'Login',      hasSession };
+  if (!mpinSet)    return { route: 'CreateMpin', hasSession };   // logged in but MPIN not yet created
+  return { route: 'MpinLogin', hasSession };
+}
+
 export default function RootNavigator() {
   const { COLORS, isDark } = useTheme();
   const [initialRoute, setInitialRoute] = useState<InitialRoute | null>(null);
@@ -69,18 +83,16 @@ export default function RootNavigator() {
   useEffect(() => {
     (async () => {
       // AsyncStorageHelper.clearAll(); // --- IGNORE --- TEMP: Clear storage on every app start for testing
-      const onboarded = await AsyncStorageHelper.isOnboarded();
-      const token     = await AsyncStorageHelper.getToken();
-      const mpinSet   = await AsyncStorageHelper.isMpinSet();
+      startSessionWatcher();
 
-      if (!onboarded)         setInitialRoute('Onboarding');
-      else if (!token)        setInitialRoute('Login');
-      else if (!mpinSet)      setInitialRoute('CreateMpin');   // logged in but MPIN not yet created
-      else                    setInitialRoute('MpinLogin');
-
-      // Init notifications + in-app messaging only when logged in
-      if (token) {
-        await initNotifications();
+      try {
+        const { route, hasSession } = await withTimeout(resolveInitialRoute(), 10000);
+        setInitialRoute(route);
+        // Init notifications + in-app messaging only when logged in
+        if (hasSession) initNotifications().catch(() => {});
+      } catch {
+        // Storage error / timeout → never leave the user on the spinner
+        setInitialRoute('Login');
       }
     })();
   }, []);

@@ -3,6 +3,8 @@
 import { createSlice, createAsyncThunk, PayloadAction, ActionReducerMapBuilder } from '@reduxjs/toolkit';
 import { authService } from '../api/services/authService';
 import { AsyncStorageHelper } from '../utils/AsyncStorageHelper';
+import { isTokenExpired } from '../utils/tokenUtils';
+import { withTimeout } from '../utils/withTimeout';
 import {
   AuthState,
   UserData,
@@ -80,13 +82,26 @@ export const resetPassword = createAsyncThunk(
   }
 );
 
-export const logoutUser = createAsyncThunk('auth/logout', async () => {
-  await AsyncStorageHelper.clearSession();
-  try {
-    const { deactivateDeviceToken } = await import('../utils/NotificationService');
-    await deactivateDeviceToken();
-  } catch {}
-});
+export const logoutUser = createAsyncThunk(
+  'auth/logout',
+  async (opts: { notifyServer?: boolean } | void) => {
+    const notifyServer = opts?.notifyServer ?? true;
+    // Tell the server first — it still needs the token. Skip if the token is already dead.
+    const token = await AsyncStorageHelper.getToken();
+    if (notifyServer && token && !isTokenExpired(token)) {
+      try {
+        const { deactivateDeviceToken } = await import('../utils/NotificationService');
+        await withTimeout(deactivateDeviceToken(), 6000);
+      } catch {}
+    }
+    await AsyncStorageHelper.clearSession();
+    // Native sign-out can hang (e.g. Google not configured) — never let it block logout
+    try {
+      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+      await withTimeout(GoogleSignin.signOut(), 3000);
+    } catch {}
+  }
+);
 
 export const restoreSession = createAsyncThunk('auth/restoreSession', async () => {
   const token = await AsyncStorageHelper.getToken();
@@ -175,9 +190,7 @@ const authSlice = createSlice({
       .addCase(resetPassword.rejected,  rejected)
       .addCase(resetPassword.fulfilled, (state: AuthState) => { state.loading = false; })
       // logout
-      .addCase(logoutUser.fulfilled, (state) => {
-        state.user = null; state.token = null; state.isLoggedIn = false;
-      })
+      .addCase(logoutUser.fulfilled, () => initialState)
       // restoreSession
       .addCase(restoreSession.fulfilled, (state, action) => {
         state.token    = action.payload.token;

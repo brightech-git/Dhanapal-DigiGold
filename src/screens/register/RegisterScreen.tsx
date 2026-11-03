@@ -97,7 +97,8 @@ export default function RegisterScreen() {
           navigation.navigate('GoogleContactUpdate', { userId: user.id });
         } else {
           toast.success('Welcome!', { message: `Signed in as ${user.username ?? user.email}` });
-          const mpinSet = await AsyncStorageHelper.isMpinSet();
+          const mpinSet = user.mpinSet ? user.mpinSet === 'Y' : await AsyncStorageHelper.isMpinSet();
+          await AsyncStorageHelper.setMpinSet(mpinSet);
           navigation.replace(mpinSet ? 'MpinLogin' : 'CreateMpin');
         }
       } else {
@@ -134,7 +135,8 @@ export default function RegisterScreen() {
           navigation.navigate('GoogleContactUpdate', { userId: user.id });
         } else {
           toast.success('Welcome!', { message: `Signed in as ${user.username ?? user.email}` });
-          const mpinSet = await AsyncStorageHelper.isMpinSet();
+          const mpinSet = user.mpinSet ? user.mpinSet === 'Y' : await AsyncStorageHelper.isMpinSet();
+          await AsyncStorageHelper.setMpinSet(mpinSet);
           navigation.replace(mpinSet ? 'MpinLogin' : 'CreateMpin');
         }
       } else {

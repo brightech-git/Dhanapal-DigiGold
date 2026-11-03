@@ -21,7 +21,8 @@ import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../theme';
 import { useLanguage } from '../providers/LanguageProvider';
 import AppLanguagePicker, { LanguageCode, INDIAN_LANGUAGES } from './ui/appcomponents/AppLanguage';
-import { useAppSelector } from '../store/hooks';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { logoutUser } from '../store/authSlice';
 import { AsyncStorageHelper } from "../utils/AsyncStorageHelper";
 import CustomAlert from './ui/CustomAlert';
 
@@ -34,6 +35,7 @@ type Props = {
 
 export default function Sidebar({ visible, onClose }: Props) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const dispatch   = useAppDispatch();
   const { COLORS, FONTS, SIZES, SHADOWS, isDark, toggleTheme } = useTheme();
   const { language, setLanguage, t } = useLanguage();
   const user = useAppSelector((s) => s.auth.user);
@@ -306,9 +308,9 @@ export default function Sidebar({ visible, onClose }: Props) {
           { label: 'Cancel', style: 'secondary', onPress: () => setLogoutAlert(false) },
           {
             label: 'Sign Out', style: 'danger',
-            onPress: () => {
+            onPress: async () => {
               setLogoutAlert(false);
-              AsyncStorageHelper.clearAll();
+              await dispatch(logoutUser());
               navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
             },
           },

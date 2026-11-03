@@ -3,6 +3,7 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { mpinService } from '../api/services/mpinService';
 import { AsyncStorageHelper } from '../utils/AsyncStorageHelper';
+import { logoutUser } from './authSlice';
 
 interface MpinState {
   mpinSet:  boolean;
@@ -107,7 +108,9 @@ const mpinSlice = createSlice({
 
       .addCase(forgotMpinVerify.pending,    pending)
       .addCase(forgotMpinVerify.rejected,   rejected)
-      .addCase(forgotMpinVerify.fulfilled,  done);
+      .addCase(forgotMpinVerify.fulfilled,  done)
+
+      .addCase(logoutUser.fulfilled,        () => initialState);
   },
 });
 

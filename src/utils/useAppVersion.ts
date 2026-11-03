@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { axiosInstance } from '../api/axiosInstance';
 import { APP_CONFIG } from '../api/endpoints';
+import { withTimeout } from './withTimeout';
 
 interface AppConfig {
   PLAYSTORE_VERSION: string;
@@ -34,7 +35,11 @@ export function useAppVersion() {
   useEffect(() => {
     (async () => {
       try {
-        const res  = await axiosInstance.get<AppConfig[]>(APP_CONFIG.ALL);
+        // Short cap — the app must never sit on the splash spinner waiting for this
+        const res  = await withTimeout(
+          axiosInstance.get<AppConfig[]>(APP_CONFIG.ALL, { timeout: 8000, skipSessionExpiry: true }),
+          9000,
+        );
         const cfg  = res.data?.[0];
         if (!cfg) { setChecked(true); return; }
 

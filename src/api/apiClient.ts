@@ -1,5 +1,6 @@
 // apiClient.ts
 import { axiosInstance } from "./axiosInstance";
+import { withTimeout, REQUEST_TIMEOUT_MS, TIMEOUT_MSG, NETWORK_MSG } from "../utils/withTimeout";
 
 export type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
@@ -30,16 +31,21 @@ export const callApi = async <T, R>({
     try {
 
        
-        const response = await axiosInstance.request<R>({
-            method,
-            url,
-            params,
-            data,
-            headers: {
-                ...headers,
-                ...(isFormData ? { "Content-Type": "multipart/form-data" } : {}),
-            },
-        });
+        // Hard 30s cap (covers interceptors too) so Login / MPIN loaders can never spin forever
+        const response = await withTimeout(
+            axiosInstance.request<R>({
+                method,
+                url,
+                params,
+                data,
+                timeout: REQUEST_TIMEOUT_MS,
+                headers: {
+                    ...headers,
+                    ...(isFormData ? { "Content-Type": "multipart/form-data" } : {}),
+                },
+            }),
+            REQUEST_TIMEOUT_MS + 1000,
+        );
 
         // console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         // console.log(`✅ API SUCCESS [${method.toUpperCase()}] ${url}`);
@@ -69,9 +75,14 @@ export const callApi = async <T, R>({
         // console.log('💬 Message    :', resData?.message ?? resData ?? error?.message ?? 'Unknown error');
         // console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
+        const isTimeout = error?.isTimeout || error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT';
+        const isNetwork = !error?.response && error?.message === 'Network Error';
+
         throw {
             status: 'error',
             message:
+                (isTimeout ? TIMEOUT_MSG : null) ||
+                (isNetwork ? NETWORK_MSG : null) ||
                 resData?.message ||
                 resData?.error   ||
                 (typeof resData === 'string' ? resData : null) ||
