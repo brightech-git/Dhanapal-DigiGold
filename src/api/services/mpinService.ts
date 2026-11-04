@@ -11,14 +11,27 @@ export const mpinService = {
       params: { mpin },
     }),
 
-  verify: (enteredMpin: string) =>
-    callApi<null, string>({
-      method: 'post',
-      url: MPIN.VERIFY,
-      params: { enteredMpin },
-
-      
-    }),
+  verify: async (enteredMpin: string) => {
+    if (__DEV__) {
+      console.log('[MPIN Login] Request', {
+        method: 'POST',
+        url: MPIN.VERIFY,
+        params: { enteredMpin: '*'.repeat(enteredMpin.length) },
+      });
+    }
+    try {
+      const response = await callApi<null, string>({
+        method: 'post',
+        url: MPIN.VERIFY,
+        params: { enteredMpin },
+      });
+      if (__DEV__) console.log('[MPIN Login] Response', response);
+      return response;
+    } catch (error) {
+      if (__DEV__) console.log('[MPIN Login] Error', error);
+      throw error;
+    }
+  },
 
   reset: (oldMpin: string, newMpin: string) =>
     callApi<null, string>({

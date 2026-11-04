@@ -43,6 +43,18 @@ import { ratesService } from '../../api/services/ratesService';
 type RouteProps = RouteProp<RootStackParamList, 'SchemeJoin'>;
 type NavProps   = NativeStackNavigationProp<RootStackParamList, 'SchemeJoin'>;
 
+// Database varchar limits for the member fields collected on this screen.
+const MEMBER_INPUT_LIMITS = {
+  name: 50, // PNAME
+  email: 75, // EMAIL
+  doorStreet: 50, // DOORNO / ADDRESS1 / NOM_ADDR1
+  area: 30, // AREA (also copied to ADDRESS2)
+  city: 30, // CITY / NOM_CITY
+  stateVal: 30, // STATE / NOM_STATE
+  nominee: 50, // NOMENI
+  nomRel: 30, // NOMINEE_RELATIONSHIP
+} as const;
+
 // ── Field Component ───────────────────────────────────────────────
 interface FieldProps {
   label: string;
@@ -896,7 +908,14 @@ export default function SchemeJoinScreen() {
   const isValidPAN     = (v: string) => v === '' || /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v.trim().toUpperCase());
   const isValidEmail   = (v: string) => v.includes('@') && v.includes('.');
 
+  // Drafts, profile values and postal lookup results bypass TextInput.maxLength.
+  // Reject oversized values before creating a payment rather than truncating them.
+  const memberTextValues = { name, email, doorStreet, area, city, stateVal, nominee, nomRel };
+  const withinMemberLimits = (Object.keys(MEMBER_INPUT_LIMITS) as Array<keyof typeof MEMBER_INPUT_LIMITS>)
+    .every(key => memberTextValues[key].trim().length <= MEMBER_INPUT_LIMITS[key]);
+
   const isFormValid =
+    withinMemberLimits &&
     name.trim().length > 1 &&
     isValidMobile(mobile) &&
     isValidEmail(email) &&
@@ -1014,7 +1033,7 @@ export default function SchemeJoinScreen() {
   const contentRef    = useRef<View>(null);
   const fieldNodeRefs = useRef<Record<string, any>>({});
   const registerField = (key: string) => (node: any) => { fieldNodeRefs.current[key] = node; };
-  const FIELD_ORDER = ['group','amount','name','mobile','email','aadhaar','pan','dob','gender','doorStreet','pincode','area','nominee','nomMobile'];
+  const FIELD_ORDER = ['group','amount','name','mobile','email','aadhaar','pan','dob','gender','doorStreet','pincode','area','nominee','nomRel','nomMobile'];
   const scrollToFirstError = (errs: Record<string, string>) => {
     const key = FIELD_ORDER.find(k => errs[k]);
     const node = key ? fieldNodeRefs.current[key] : null;
@@ -1073,6 +1092,19 @@ export default function SchemeJoinScreen() {
     if (effectiveAmount <= 0)         fe.amount   = 'Select or enter amount';
     else if (belowMin)                fe.amount   = minAmountMsg;
     if (isFixed && !selectedGroup)    fe.group    = 'Select a group';
+
+    const lengthLabels = {
+      name: 'Full name', email: 'Email address', doorStreet: 'Door number / street',
+      area: 'Area', city: 'City', stateVal: 'State', nominee: 'Nominee name',
+      nomRel: 'Nominee relationship',
+    };
+    for (const key of Object.keys(MEMBER_INPUT_LIMITS) as Array<keyof typeof MEMBER_INPUT_LIMITS>) {
+      if (memberTextValues[key].trim().length > MEMBER_INPUT_LIMITS[key]) {
+        // City/state are read-only postal results; show their error at the PIN input.
+        const errorKey = key === 'city' || key === 'stateVal' ? 'pincode' : key;
+        fe[errorKey] = `${lengthLabels[key]} must be ${MEMBER_INPUT_LIMITS[key]} characters or fewer`;
+      }
+    }
 
     setFieldErrors(fe);
     if (Object.keys(fe).length > 0) {
@@ -1296,6 +1328,7 @@ export default function SchemeJoinScreen() {
               value={name}
               placeholder="Enter your full name"
               onChangeText={(v) => { setName(v); clearErr('name'); }}
+              maxLength={MEMBER_INPUT_LIMITS.name}
               error={fieldErrors.name}
               indicator="required"
               colors={COLORS} fonts={FONTS}
@@ -1323,6 +1356,7 @@ export default function SchemeJoinScreen() {
               placeholder="your@email.com"
               onChangeText={(v) => { setEmail(v); clearErr('email'); }}
               keyboardType="email-address"
+              maxLength={MEMBER_INPUT_LIMITS.email}
               error={fieldErrors.email}
               indicator="required"
               colors={COLORS} fonts={FONTS}
@@ -1411,6 +1445,7 @@ export default function SchemeJoinScreen() {
               value={doorStreet}
               placeholder="e.g. 12A, Gandhi Nagar, 2nd Street"
               onChangeText={(v) => { setDoorStreet(v); clearErr('doorStreet'); }}
+              maxLength={MEMBER_INPUT_LIMITS.doorStreet}
               error={fieldErrors.doorStreet}
               indicator="required"
               colors={COLORS} fonts={FONTS}
@@ -1535,16 +1570,20 @@ export default function SchemeJoinScreen() {
               value={nominee}
               placeholder="Nominee's full name"
               onChangeText={(v) => { setNominee(v); clearErr('nominee'); }}
+              maxLength={MEMBER_INPUT_LIMITS.nominee}
               error={fieldErrors.nominee}
               indicator="required"
               colors={COLORS} fonts={FONTS}
             />
             <Field
+              ref={registerField('nomRel')}
               label="Relationship"
               icon="heart-outline"
               value={nomRel}
               placeholder="e.g. Spouse, Son, Daughter"
-              onChangeText={setNomRel}
+              onChangeText={(v) => { setNomRel(v); clearErr('nomRel'); }}
+              maxLength={MEMBER_INPUT_LIMITS.nomRel}
+              error={fieldErrors.nomRel}
               indicator="optional"
               colors={COLORS} fonts={FONTS}
             />
